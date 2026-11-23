@@ -1,0 +1,45 @@
+::id(cli.board)
+
+`sisho-board`: interactive operating dashboard and board for the Tomet ecosystem.
+
+Status: decided 2026-10-20, extracted into standalone repository `sisho-board` with `sisho-board-sdk`.
+
+=[ Overview ]
+
+`sisho-board` provides a dedicated operating dashboard for a Tomet vault or repository: inspecting core tool versions, managing extension execution trust, viewing extension board panes, viewing broken links, and running checks or fixes on demand.
+
+It runs standalone as `sisho-board [path]`, or through `sisho` as `sisho board [path]`.
+
+=[ Two-tier Design: Board & Counter ]
+
+1. **Board (Information Display)**:
+   - **Tools & Extensions**: Displays versions and compatibility status of core tools (`tomet`, `twrit`, `catasto`), along with installed `sisho-<word>` extensions discovered on `PATH` and their trust status (`Untrusted`, `Allowed`, `Denied`).
+   - **Integrity & Checks**: Displays status, exit code, and duration of each step in `check`, with an output preview pane showing stdout/stderr of the selected step.
+   - **Extension Board Panes**: Displays custom panes (`BoardPane`) emitted by allowed extensions via `sisho-<word> --sisho-board-pane <path>`, including a percentage `BoardGauge` bar and selectable `BoardItem` rows whose details appear in the preview pane.
+   - **Broken Links**: Displays summary and entries of broken links found by `tomet check-links --json`.
+
+2. **Counter (Execution Selection)**:
+   - The interactive prompt bar at the bottom for choosing and executing tasks:
+     - `Tab` / `BackTab`: Cycle focus between Board panes (`Integrity & Checks`, `Extension Panes` when present, `Tools & Extensions`, `Broken Links`, and `Step Output Preview`).
+     - `↑` / `k`, `↓` / `j`: Navigate selection or scroll within the focused pane.
+     - `a` / `Enter` (when focused on `Tools & Extensions`): Toggle trust state (`Untrusted` -> `Allowed` -> `Denied` -> `Allowed`) for the selected extension and persist immediately to `~/.config/sisho/board.json`.
+     - `Enter` / `e` (when focused on `Broken Links`): Open the selected link's source file in an editor at the broken line, restoring the board and re-verifying links on return.
+     - `c`: Execute check steps and refresh allowed extension board panes.
+     - `f`: Execute fix steps. Always prompts for confirmation (`Apply fixes? [y/N]`) before any file write occurs.
+     - `l`: Re-run the link check (`tomet check-links --json`).
+     - `d`: Launch extension `sisho-desk` (if installed, active, and `Allowed`) with terminal handover.
+     - `q` / `Esc`: Exit the board.
+
+=[ Extension Trust (`~/.config/sisho/board.json`) ]
+
+- **Config Location**: `$XDG_CONFIG_HOME/sisho/board.json` if `XDG_CONFIG_HOME` is set and non-empty; otherwise `$HOME/.config/sisho/board.json`.
+- **Default Untrusted Policy**: Scanning `PATH` never executes any binary. An extension absent from `board.json` has state `Untrusted`. `sisho-board` never executes an `Untrusted` or `Denied` extension for `--sisho-extension-info`, `--sisho-board-pane`, editor fallback, or `d` handover.
+
+=[ Board Pane Protocol (`--sisho-board-pane`) ]
+
+An extension that is marked `Allowed` is queried with `sisho-<word> --sisho-board-pane <path>`. If it supports board panes, it outputs a single `BoardPane` JSON object (defined in `sisho-board-sdk`) and exits 0:
+- `schema_version`: `1`
+- `title`: Pane title string
+- `gauge`: Optional `{ "label": "...", "percent": 0..=100 }`
+- `items`: List of `{ "label": "...", "value": "...", "status": "pass|warn|fail|info", "detail": "..." }`
+- `summary`: Optional fallback summary text for the preview pane

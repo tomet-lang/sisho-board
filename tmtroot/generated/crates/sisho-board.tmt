@@ -1,0 +1,5 @@
+::kind(api)
+
+::meta(crate: sisho-board, dependencies: (sisho-board-core), dependents: ())
+
+=[sisho-board]

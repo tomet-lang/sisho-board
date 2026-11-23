@@ -1,0 +1,42 @@
+::kind(api)
+
+::meta(crate: sisho-board-sdk, dependencies: (), dependents: (sisho-board-core))
+
+=[sisho-board-sdk]
+
+Layer 0: Extension Board Pane disclosure protocol (`--sisho-board-pane`).
+
+An extension that supports board panes can be queried by `sisho-board` with
+`sisho-<word> --sisho-board-pane [path]`. The extension inspects the vault
+or repository at `path` (default `.`), prints a single \[`BoardPane`\] JSON
+object to standard output, and exits with code 0.
+
+==[Structs]
+
+===[struct BoardPane]
+
+Structured board pane data emitted by an extension when invoked with `--sisho-board-pane`.
+
+===[struct BoardGauge]
+
+A progress or percentage gauge displayed in a \[`BoardPane`\].
+
+===[struct BoardItem]
+
+A single row item within a \[`BoardPane`\].
+
+==[Enums]
+
+===[enum BoardStatus]
+
+Visual status indicator for a \[`BoardItem`\].
+
+==[Constants]
+
+===[const CURRENT_BOARD_SCHEMA_VERSION]
+
+Current schema version for extension board panes.
+
+===[const BOARD_PANE_FLAG]
+
+The standard CLI flag that requests an extension's board pane data.

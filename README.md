@@ -1,0 +1,60 @@
+<!-- Generated from tmtroot/readme.tmt. Edit that, then `tomet export .`. -->
+
+# Sisho Board
+
+Interactive operating dashboard and board for the Tomet ecosystem: inspect core tool versions, extension status and trust permissions, extension board panes, integrity checks, and broken links.
+
+## Overview
+
+`sisho-board` is the interactive board dashboard for the Tomet ecosystem. It runs standalone as `sisho-board [path]`, or through the `sisho` orchestrator as `sisho board [path]`.
+
+Keeping `sisho-board` and `sisho-board-sdk` in their own repository ensures that `sisho` itself remains a stateless orchestrator with zero TUI dependencies (`ratatui`, `crossterm`) and zero user configuration files.
+
+The full CLI and Board Pane specification is at [tmtroot/spec/cli/board.tmt](tmtroot/spec/cli/board.tmt).
+
+## Usage
+
+```bash
+sisho-board [path]    # open board in path (defaults to ".")
+sisho board [path]    # run through sisho as an extension
+```
+
+Exit codes:
+
+- **`0`**: normal exit (e.g. quit with `q` or `--sisho-extension-info`).
+- **`1`**: could not do what was asked (e.g. standard input is not a terminal, or error during operation).
+- **`2`**: usage error (invalid command-line arguments).
+
+## Extension Trust & Board Pane Protocol
+
+`sisho-board` discovers `sisho-<word>` extensions on `PATH` without executing them. By default, every discovered extension is `Untrusted`, and `sisho-board` never executes an untrusted or denied extension binary.
+
+1. **Interactive Trust Management (`~/.config/sisho/board.json`)**:
+
+- Focus the `Tools & Extensions` pane (`Tab`) and press `a` or `Enter` on an extension to toggle its permission between `Allowed` and `Denied` (persisted in `$XDG_CONFIG_HOME/sisho/board.json` or `~/.config/sisho/board.json`).
+
+2. **Board Pane Protocol (`sisho-board-sdk`)**:
+
+- Once an extension is marked `Allowed`, `sisho-board` queries `sisho-<word> --sisho-extension-info` and `sisho-<word> --sisho-board-pane <path>`.
+- If the extension prints a `BoardPane` JSON object (defined in `sisho-board-sdk`), `sisho-board` renders its title, optional percentage `BoardGauge` bar, and selectable `BoardItem` entries with detailed previews.
+
+## Workspace Layout
+
+- `app` (`sisho-board`) -- Main CLI binary (`sisho-board`). Layer 2.
+- `crates/sisho-board-core` (`sisho-board-core`) -- Core library holding the board state machine, trust persistence (`board.json`), runner, and Ratatui terminal UI. Layer 1.
+- `crates/sisho-board-sdk` (`sisho-board-sdk`) -- Protocol types and helpers for `--sisho-board-pane` (`BoardPane`, `BoardGauge`, `BoardItem`, `BoardStatus`). Layer 0.
+
+## Building and Testing
+
+### Build workspace
+
+```bash
+cargo build
+```
+
+### Run tests
+
+```bash
+cargo test --workspace
+```
+

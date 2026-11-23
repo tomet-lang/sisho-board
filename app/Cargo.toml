@@ -1,0 +1,20 @@
+[package]
+name                   = "sisho-board"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description       = "Interactive operating dashboard and board for the Tomet ecosystem."
+publish           = false
+
+[[bin]]
+name = "sisho-board"
+path = "src/main.rs"
+
+[dependencies]
+sisho-board-core = { workspace = true }
+sisho-sdk        = { workspace = true }
+#--- Crates.io ---
+anyhow    = { workspace = true }
+clap      = { workspace = true }
+jobserver = { workspace = true }

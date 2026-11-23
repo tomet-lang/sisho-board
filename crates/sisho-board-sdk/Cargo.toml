@@ -1,0 +1,12 @@
+[package]
+name                   = "sisho-board-sdk"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description       = "Protocol definitions and helpers for sisho-board extension panes (--sisho-board-pane)."
+publish           = false
+
+[dependencies]
+serde      = { workspace = true }
+serde_json = { workspace = true }
