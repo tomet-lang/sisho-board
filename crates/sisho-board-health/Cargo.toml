@@ -1,0 +1,15 @@
+[package]
+name                   = "sisho-board-health"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description            = "Vault readiness, health analysis, and link integrity reporting for sisho-board."
+publish                = false
+
+[dependencies]
+sisho-board-run = { workspace = true }
+sisho-board-sdk = { workspace = true }
+#--- Crates.io ---
+serde      = { workspace = true }
+serde_json = { workspace = true }

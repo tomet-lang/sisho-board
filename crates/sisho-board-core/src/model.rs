@@ -3,14 +3,14 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 
+use sisho_board_health::health::{self, HealthReport, PillarMetric};
+use sisho_board_health::links::{self, BrokenLink, Report};
+use sisho_board_run::{Outcome, run_parallel_streaming};
 use sisho_board_sdk::{BoardItem, BoardPane};
 use sisho_sdk::ExtensionInfo;
 
 use crate::config::{BoardConfig, default_config_path};
 use crate::extension::{query_board_pane, query_info};
-use crate::health::{self, HealthReport, PillarMetric};
-use crate::links::{self, BrokenLink, Report};
-use crate::runner::{Outcome, run_parallel_streaming};
 use crate::tools::{Tool, Verdict, check_steps, fix_steps};
 use crate::trust::{TrustState, default_sisho_program, set_extension_trust};
 
@@ -132,7 +132,7 @@ pub enum WorkerMessage {
     },
     ChecksDone(Vec<Outcome>),
     LinksDone(Result<Report, String>),
-    HealthDone(HealthReport),
+    HealthDone(Box<HealthReport>),
     FixStepDone {
         index: usize,
         outcome: Outcome,
@@ -490,7 +490,7 @@ impl Model {
         let sender = self.sender.clone();
         std::thread::spawn(move || {
             let report = health::analyze(&dir, links_report.as_ref());
-            let _ = sender.send(WorkerMessage::HealthDone(report));
+            let _ = sender.send(WorkerMessage::HealthDone(Box::new(report)));
         });
     }
 
@@ -550,7 +550,7 @@ impl Model {
                     if self.links_report.is_some() {
                         report.update_link_health(self.links_report.as_ref());
                     }
-                    self.health_report = Some(report);
+                    self.health_report = Some(*report);
                 }
                 WorkerMessage::ExtensionQueried {
                     word,

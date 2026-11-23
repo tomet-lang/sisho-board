@@ -1,18 +1,10 @@
 ::kind(api)
 
-::meta(crate: sisho-board-core, dependencies: (sisho-board-sdk), dependents: (sisho-board))
+::meta(crate: sisho-board-core, dependencies: (sisho-board-health, sisho-board-run, sisho-board-sdk), dependents: (sisho-board-tui))
 
 =[sisho-board-core]
 
-The operating dashboard and board for the Tomet ecosystem (`sisho-board`).
-
-Two-tier design:
-
-- @strong[Board]: Status of tools, extensions (with explicit user trust via `sisho`),
-
-extension board panes (`--sisho-board-pane`), integrity check outcomes, and broken links.
-
-- @strong[Counter]: Action prompt bar to run check, fix, check-links, manage extension trust, or open desk.
+Core state machine, extension trust delegation, and UI configuration for `sisho-board`.
 
 ==[Module config]
 
@@ -124,71 +116,6 @@ Query an allowed extension executable for its `--sisho-extension-info` metadata.
 
 Query an allowed extension executable for its `--sisho-board-pane <dir>` data.
 
-==[Module health]
-
-Vault and repository Readiness & Health (`%`) measurement engine.
-
-Evaluates six deterministic pillars across a Tomet vault or repository:
-1. @strong[Tomet Coverage]: `.tmt` source files + generated `.md` artifacts vs unmigrated `.md` files.
-2. @strong[`::id` Declaration]: share of eligible `.tmt` documents declaring `::id(...)`.
-3. @strong[`::kind` & Blueprint Coverage]: share of eligible `.tmt` documents declaring `::kind(...)` or `::blueprint(...)`, enriched with `tomet stats --json`.
-4. @strong[Link Health]: unbroken links vs total checked links from `tomet check-links --json`.
-5. @strong[Writ & Catasto Governance]: presence of `.writ.tmt`, guarded `@rule(...)` blocks, and `catasto.lock` consistency.
-6. @strong[Cleanliness & Freshness]: absence of `@draft` markers and validation errors/warnings, plus documentation vs code freshness.
-
-===[Structs]
-
-====[struct PillarMetric]
-
-Score and diagnostic detail for one readiness pillar.
-
-====[struct HealthReport]
-
-Complete Readiness & Health report for a vault or repository.
-
-===[Functions]
-
-====[fn status_for_percent]
-
-Status threshold for a percentage (`100` -> `Pass`, `70..=99` -> `Warn`, `<70` -> `Fail`).
-
-====[fn analyze]
-
-Analyze the vault/repository at `dir`, invoking `tomet stats --json` if `tomet` is available.
-
-====[fn analyze_with_stats]
-
-Analyze the vault/repository at `dir` with an optional pre-fetched `tomet stats --json` payload.
-
-==[Module links]
-
-The link check as the board shows it: what `tomet check-links --json`
-reports about the links of a vault that point at nothing.
-
-===[Structs]
-
-====[struct Position]
-
-A line and a column, both counted from 1.
-
-====[struct BrokenLink]
-
-A link whose target does not exist.
-
-====[struct Unreadable]
-
-A document that could not be looked at.
-
-====[struct Report]
-
-What a run found.
-
-===[Functions]
-
-====[fn check]
-
-Check the links under `dir` by running `tomet check-links --json`.
-
 ==[Module model]
 
 State model and background worker coordination for `sisho-board`.
@@ -232,62 +159,6 @@ Which pane provides the content currently shown in the Output Preview pane.
 ====[enum WorkerMessage]
 
 Messages sent from background worker threads to the model.
-
-==[Module runner]
-
-Subprocess runner and parallel job execution for `sisho-board`.
-
-===[Structs]
-
-====[struct Step]
-
-A command ready to be run.
-
-====[struct Outcome]
-
-What a single step produced.
-
-===[Enums]
-
-====[enum Status]
-
-How a step ended.
-
-===[Functions]
-
-====[fn init_gate]
-
-Initialize the process-wide jobserver gate.
-
-====[fn run_parallel_streaming]
-
-Run `steps` in parallel and invoke `on_complete(index, outcome)` as each step finishes.
-Returns the outcomes in their original plan order.
-
-====[fn run_with_timeout]
-
-Run a program with arguments and a timeout, returning `Some(stdout)` if it exits 0 within `timeout`.
-
-====[fn run_with_timeout_env]
-
-Run a program with arguments, additional environment variables, and a timeout,
-returning `Some(stdout)` if it exits 0 within `timeout`.
-
-==[Module screen]
-
-Terminal guard: manages raw mode, alternate screen, and mouse capture.
-
-===[Structs]
-
-====[struct Screen]
-
-Terminal guard: ensures terminal is restored to normal state even on panic or error.
-
-===[Functions]
-
-====[fn restore_terminal]
-
-Restore the terminal to cooked mode and exit alternate screen. Safe to call multiple times.
 
 ==[Module tools]
 
@@ -367,23 +238,3 @@ Update extension trust via `<sisho_program> --allow|--deny|--untrust <target>`.
 
 Passing the extension's `canonical_path` as `target` ensures `sisho` updates
 the exact binary path.
-
-==[Module ui]
-
-Ratatui rendering for `sisho-board` (Board + Counter).
-
-===[Functions]
-
-====[fn draw]
-
-Render the complete sisho-board interface (Board + Counter).
-
-==[Functions]
-
-===[fn run]
-
-Run the interactive board TUI in `dir`.
-
-===[fn run_with_extensions]
-
-Run the interactive board TUI in `dir` with pre-scanned `extensions`.

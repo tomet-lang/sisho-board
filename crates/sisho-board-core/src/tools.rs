@@ -3,7 +3,7 @@
 use std::fmt;
 use std::path::Path;
 
-use crate::runner::Step;
+use sisho_board_run::Step;
 
 /// A semantic version `(major, minor, patch)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

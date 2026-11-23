@@ -3,7 +3,7 @@
 use std::fs;
 use std::process::Command;
 
-use sisho_board_core::health::HealthReport;
+use sisho_board_health::HealthReport;
 use sisho_sdk::ExtensionInfo;
 
 #[test]

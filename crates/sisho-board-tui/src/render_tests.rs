@@ -2,18 +2,73 @@ use std::path::PathBuf;
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use sisho_board_core::config::BoardConfig;
+use sisho_board_core::model::{
+    ExtensionItem, FocusedPane, Model, PendingTrustPrompt, PreviewSource, StepSlot, ToolStatus,
+};
+use sisho_board_core::tools::{Verdict, Version};
+use sisho_board_core::trust::TrustState;
+use sisho_board_health::{HealthReport, PillarMetric};
+use sisho_board_run::{Outcome, Status};
 use sisho_board_sdk::{BoardGauge, BoardItem, BoardPane, BoardStatus};
 use sisho_sdk::ExtensionInfo;
 
-use crate::config::BoardConfig;
-use crate::model::{
-    ExtensionItem, FocusedPane, Model, PendingTrustPrompt, PreviewSource, StepSlot, ToolStatus,
-};
-use crate::model_tests::sample_health_report;
-use crate::runner::{Outcome, Status};
-use crate::tools::{Verdict, Version};
-use crate::trust::TrustState;
 use crate::ui;
+
+fn sample_pillar(key: &str, name: &str, percent: u8, detail: &str) -> PillarMetric {
+    PillarMetric {
+        key: key.to_string(),
+        name: name.to_string(),
+        passed: percent as usize,
+        total: 100,
+        percent,
+        status: sisho_board_health::status_for_percent(percent),
+        value_summary: format!("{percent}%"),
+        detail: detail.to_string(),
+    }
+}
+
+fn sample_health_report() -> HealthReport {
+    HealthReport {
+        overall_percent: 92,
+        tomet_coverage: sample_pillar(
+            "tomet_coverage",
+            "Tomet Coverage",
+            100,
+            "All Markdown files are generated artifacts or migrated to Tomet (.tmt).",
+        ),
+        id_coverage: sample_pillar(
+            "id_coverage",
+            "::id Declaration",
+            80,
+            "Documents missing ::id(...):\n  - tmtroot/draft.tmt",
+        ),
+        kind_coverage: sample_pillar(
+            "kind_coverage",
+            "::kind & Blueprint",
+            90,
+            "Documents missing ::kind(...):\n  - tmtroot/draft.tmt",
+        ),
+        link_health: sample_pillar(
+            "link_health",
+            "Link Health",
+            100,
+            "No broken links found.",
+        ),
+        governance: sample_pillar(
+            "governance",
+            "Writ & Catasto Governance",
+            100,
+            "All 4 rules guarded.",
+        ),
+        cleanliness: sample_pillar(
+            "cleanliness",
+            "Cleanliness & Freshness",
+            80,
+            "Documents containing @draft (1):\n  - tmtroot/draft.tmt",
+        ),
+    }
+}
 
 fn create_mock_model() -> Model {
     let (sender, receiver) = std::sync::mpsc::channel();
@@ -262,13 +317,13 @@ fn renders_broken_links_list() {
     let mut terminal = Terminal::new(backend).unwrap();
 
     let mut model = create_mock_model();
-    model.links_report = Some(crate::links::Report {
+    model.links_report = Some(sisho_board_health::links::Report {
         files_scanned: 10,
         links_checked: 42,
-        broken: vec![crate::links::BrokenLink {
+        broken: vec![sisho_board_health::links::BrokenLink {
             source: PathBuf::from("docs/intro.tmt"),
             target: "missing.tmt".to_string(),
-            at: Some(crate::links::Position {
+            at: Some(sisho_board_health::links::Position {
                 line: 15,
                 column: 1,
             }),

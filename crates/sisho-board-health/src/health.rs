@@ -15,11 +15,10 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sisho_board_run::Step;
 use sisho_board_sdk::{BoardGauge, BoardItem, BoardPane, BoardStatus};
 
 use crate::links;
-use crate::runner::Step;
-use crate::tools::Tool;
 
 /// Score and diagnostic detail for one readiness pillar.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,16 +166,14 @@ pub fn status_for_percent(percent: u8) -> BoardStatus {
 }
 
 fn compute_percent(passed: usize, total: usize, empty_is_hundred: bool) -> u8 {
-    if total == 0 {
-        if empty_is_hundred { 100 } else { 0 }
-    } else {
-        ((passed.min(total) * 100) / total) as u8
-    }
+    (passed.min(total) * 100)
+        .checked_div(total)
+        .map_or(if empty_is_hundred { 100 } else { 0 }, |pct| pct as u8)
 }
 
 /// Analyze the vault/repository at `dir`, invoking `tomet stats --json` if `tomet` is available.
 pub fn analyze(dir: &Path, links_report: Option<&links::Report>) -> HealthReport {
-    let stats_outcome = Step::new("tomet stats --json", Tool::Tomet.name())
+    let stats_outcome = Step::new("tomet stats --json", "tomet")
         .args(["stats", "--json"])
         .arg(dir)
         .run();
@@ -962,9 +959,15 @@ mod tests {
     use crate::links::{BrokenLink, Position, Report as LinksReport};
 
     fn temp_fixture_dir(slug: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "sisho-board-health-test-{}-{slug}",
-            std::process::id()
+            "sisho-board-health-test-{nanos}-{seq}-{slug}",
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();

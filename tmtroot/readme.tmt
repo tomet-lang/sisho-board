@@ -65,8 +65,11 @@ In addition to the built-in standard cards, `sisho-board` discovers `sisho-<word
 
 ==[ Workspace Layout ]
 
--| @dir(app) (`sisho-board`) -- Main CLI binary (`sisho-board`). Layer 2.
--| @dir(crates/sisho-board-core) (`sisho-board-core`) -- Core library holding the board state machine, built-in `Vault Readiness & Health` engine, `sisho` trust delegation, portable UI config (`board.json`), runner, and Ratatui terminal UI. Layer 1.
+-| @dir(app) (`sisho-board`) -- Main CLI binary (`sisho-board`). Layer 3.
+-| @dir(crates/sisho-board-tui) (`sisho-board-tui`) -- Ratatui terminal UI, screen guard, and interactive event loop. Layer 2.
+-| @dir(crates/sisho-board-core) (`sisho-board-core`) -- Pure board state machine, `sisho` trust delegation, extension discovery, editor resolution, and portable UI config (`board.json`). Layer 1.
+-| @dir(crates/sisho-board-health) (`sisho-board-health`) -- Built-in `Vault Readiness & Health` (`%`) six-pillar analyzer and `tomet check-links` parser. Layer 1.
+-| @dir(crates/sisho-board-run) (`sisho-board-run`) -- Jobserver-gated subprocess runner (`Step`, `Outcome`, `Status`). Layer 0.
 -| @dir(crates/sisho-board-sdk) (`sisho-board-sdk`) -- Protocol types and helpers for `--sisho-board-pane` (`BoardPane`, `BoardGauge`, `BoardItem`, `BoardStatus`). Layer 0.
 
 ==[ Building and Testing ]

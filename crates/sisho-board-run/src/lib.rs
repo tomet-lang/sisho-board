@@ -7,12 +7,12 @@ use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use jobserver_gate::JobServerGate;
+use jobserver_gate::{Client, JobServerGate};
 
 static GATE: OnceLock<JobServerGate> = OnceLock::new();
 
 /// Initialize the process-wide jobserver gate.
-pub fn init_gate(client: jobserver::Client) {
+pub fn init_gate(client: Client) {
     let _ = GATE.set(JobServerGate::new(client));
 }
 
@@ -21,7 +21,7 @@ fn gate() -> &'static JobServerGate {
         let limit = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        let client = jobserver::Client::new(limit.saturating_sub(1))
+        let client = Client::new(limit.saturating_sub(1))
             .expect("failed to initialize fallback jobserver");
         JobServerGate::new(client)
     })

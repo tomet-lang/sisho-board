@@ -12,8 +12,10 @@ name = "sisho-board"
 path = "src/main.rs"
 
 [dependencies]
-sisho-board-core = { workspace = true }
-sisho-sdk        = { workspace = true }
+sisho-board-health = { workspace = true }
+sisho-board-run    = { workspace = true }
+sisho-board-tui    = { workspace = true }
+sisho-sdk          = { workspace = true }
 #--- Crates.io ---
 anyhow     = { workspace = true }
 clap       = { workspace = true }

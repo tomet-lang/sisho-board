@@ -613,7 +613,9 @@ dependencies = [
  "clap",
  "jobserver",
  "serde_json",
- "sisho-board-core",
+ "sisho-board-health",
+ "sisho-board-run",
+ "sisho-board-tui",
  "sisho-sdk",
 ]
 
@@ -621,15 +623,29 @@ dependencies = [
 name = "sisho-board-core"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "crossterm",
- "jobserver",
- "jobserver-gate",
- "ratatui",
  "serde",
  "serde_json",
+ "sisho-board-health",
+ "sisho-board-run",
  "sisho-board-sdk",
  "sisho-sdk",
+]
+
+[[package]]
+name = "sisho-board-health"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sisho-board-run",
+ "sisho-board-sdk",
+]
+
+[[package]]
+name = "sisho-board-run"
+version = "0.1.0"
+dependencies = [
+ "jobserver-gate",
 ]
 
 [[package]]
@@ -638,6 +654,20 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "sisho-board-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "ratatui",
+ "sisho-board-core",
+ "sisho-board-health",
+ "sisho-board-run",
+ "sisho-board-sdk",
+ "sisho-sdk",
 ]
 
 [[package]]

@@ -14,9 +14,10 @@ does not relax the rule to fit the change it wanted to make.
   guard: (twrit: layers)
 
   layers: (
-    2: ("app")
-    1: ("crates/sisho-board-core")
-    0: ("crates/sisho-board-sdk")
+    3: ("app")
+    2: ("crates/sisho-board-tui")
+    1: ("crates/sisho-board-core", "crates/sisho-board-health")
+    0: ("crates/sisho-board-run", "crates/sisho-board-sdk")
   )
 }
 
@@ -24,9 +25,43 @@ Every workspace member belongs to exactly one layer, and depends only on
 layers strictly below its own. Same-layer dependencies are allowed;
 upward ones are not.
 
-Layer 0 holds the Board Pane disclosure protocol SDK (`sisho-board-sdk`).
-Layer 1 holds the board state machine, trust persistence, runner, and
-Ratatui terminal interface (`sisho-board-core`). Layer 2 is the CLI program.
+Layer 0 holds the Board Pane disclosure protocol SDK (`sisho-board-sdk`) and
+the jobserver-gated subprocess runner (`sisho-board-run`).
+Layer 1 holds the pure state machine and trust delegation (`sisho-board-core`)
+and the Vault Readiness & Health / link-check engine (`sisho-board-health`).
+Layer 2 holds the Ratatui terminal UI and interactive event loop (`sisho-board-tui`).
+Layer 3 is the CLI program (`app`).
+
+==[ process-door ]
+
+@rule(process-door){
+  guard: (twrit: door)
+
+  door: (
+    names:   ("std::process")
+    within:  ("crates/*")
+    allowed: ("crates/sisho-board-run")
+  )
+}
+
+Only `crates/sisho-board-run` spawns or inspects subprocesses via `std::process`
+inside `crates/*`, ensuring all subprocess execution goes through the
+jobserver-gated runner.
+
+==[ no-tui-in-core ]
+
+@rule(no-tui-in-core){
+  guard: (twrit: door)
+
+  door: (
+    names:   ("ratatui", "crossterm")
+    within:  ("crates/*")
+    allowed: ("crates/sisho-board-tui")
+  )
+}
+
+Only `crates/sisho-board-tui` depends on or imports `ratatui` or `crossterm`
+inside `crates/*`, keeping Layer 0 and Layer 1 crates TUI-free.
 
 ==[ no-sisho-crates ]
 

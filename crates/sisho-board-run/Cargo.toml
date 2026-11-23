@@ -1,0 +1,11 @@
+[package]
+name                   = "sisho-board-run"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description            = "Subprocess runner and parallel job execution for sisho-board."
+publish                = false
+
+[dependencies]
+jobserver-gate = { workspace = true }

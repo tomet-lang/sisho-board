@@ -154,8 +154,10 @@ mod tests {
 
     #[test]
     fn load_and_save_board_config_roundtrip() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("sisho-board-config-test-{}", std::process::id()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "sisho-board-config-test-{}",
+            crate::unique_test_suffix()
+        ));
         let _ = fs::remove_dir_all(&temp_dir);
         let config_path = temp_dir.join("sisho").join("board").join("board.json");
 

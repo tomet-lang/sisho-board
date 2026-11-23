@@ -1,0 +1,55 @@
+::kind(api)
+
+::meta(crate: sisho-board-tui, dependencies: (sisho-board-core, sisho-board-health, sisho-board-run, sisho-board-sdk), dependents: (sisho-board))
+
+=[sisho-board-tui]
+
+Ratatui terminal interface and interactive event loop for `sisho-board`.
+
+Two-tier design:
+
+- @strong[Board]: Status of tools, extensions (with explicit user trust via `sisho`),
+
+extension board panes (`--sisho-board-pane`), integrity check outcomes, and broken links.
+
+- @strong[Counter]: Action prompt bar to run check, fix, check-links, manage extension trust, or open desk.
+
+==[Module screen]
+
+Terminal guard: manages raw mode, alternate screen, and mouse capture.
+
+===[Structs]
+
+====[struct Screen]
+
+Terminal guard: ensures terminal is restored to normal state even on panic or error.
+
+===[Functions]
+
+====[fn restore_terminal]
+
+Restore the terminal to cooked mode and exit alternate screen. Safe to call multiple times.
+
+==[Module ui]
+
+Ratatui rendering for `sisho-board` (Board + Counter).
+
+===[Functions]
+
+====[fn draw]
+
+Render the complete sisho-board interface (Board + Counter).
+
+==[Functions]
+
+===[fn run]
+
+Run the interactive board TUI in `dir`.
+
+===[fn run_with_extensions]
+
+Run the interactive board TUI in `dir` with pre-scanned `extensions`.
+
+===[fn run_with_model]
+
+Run the interactive board TUI with an initialized \[`Model`\].

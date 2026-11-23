@@ -10,8 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-
-use crate::runner::{Status, Step, run_with_timeout};
+use sisho_board_run::{Status, Step, run_with_timeout};
 
 /// Trust permission state for an extension discovered on `PATH`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,8 +160,10 @@ mod tests {
     fn fetch_extensions_and_set_extension_trust_delegate_to_sisho_binary() {
         use std::os::unix::fs::PermissionsExt;
 
-        let temp_dir =
-            std::env::temp_dir().join(format!("sisho-board-trust-cli-test-{}", std::process::id()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "sisho-board-trust-cli-test-{}",
+            crate::unique_test_suffix()
+        ));
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
 

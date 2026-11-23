@@ -2,15 +2,15 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use sisho_board_health::health::{HealthReport, PillarMetric};
+use sisho_board_health::links::{BrokenLink, Position, Report};
+use sisho_board_run::{Outcome, Status};
 use sisho_board_sdk::{BoardGauge, BoardItem, BoardPane, BoardStatus};
 
 use crate::config::BoardConfig;
-use crate::health::{HealthReport, PillarMetric};
-use crate::links::{BrokenLink, Position, Report};
 use crate::model::{
     ExtensionItem, FocusedPane, Model, PendingTrustPrompt, PreviewSource, StepSlot, WorkerMessage,
 };
-use crate::runner::{Outcome, Status};
 use crate::trust::TrustState;
 
 fn sample_pillar(key: &str, name: &str, percent: u8, detail: &str) -> PillarMetric {
@@ -20,13 +20,13 @@ fn sample_pillar(key: &str, name: &str, percent: u8, detail: &str) -> PillarMetr
         passed: percent as usize,
         total: 100,
         percent,
-        status: crate::health::status_for_percent(percent),
+        status: sisho_board_health::status_for_percent(percent),
         value_summary: format!("{percent}%"),
         detail: detail.to_string(),
     }
 }
 
-pub fn sample_health_report() -> HealthReport {
+fn sample_health_report() -> HealthReport {
     HealthReport {
         overall_percent: 92,
         tomet_coverage: sample_pillar(
@@ -220,7 +220,7 @@ fn untrusted_and_denied_extensions_are_never_executed_until_confirmed_allowed() 
 
         let temp_dir = std::env::temp_dir().join(format!(
             "sisho-board-sec-test-{}",
-            std::process::id()
+            crate::unique_test_suffix()
         ));
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();

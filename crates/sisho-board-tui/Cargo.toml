@@ -1,0 +1,19 @@
+[package]
+name                   = "sisho-board-tui"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description            = "Ratatui terminal interface and interactive event loop for sisho-board."
+publish                = false
+
+[dependencies]
+sisho-board-core   = { workspace = true }
+sisho-board-health = { workspace = true }
+sisho-board-run    = { workspace = true }
+sisho-board-sdk    = { workspace = true }
+sisho-sdk          = { workspace = true }
+#--- Crates.io ---
+anyhow    = { workspace = true }
+crossterm = { workspace = true }
+ratatui   = { workspace = true }

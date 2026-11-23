@@ -2,8 +2,9 @@
 
 use std::path::Path;
 
+use sisho_board_run::Step;
+
 use crate::model::ExtensionItem;
-use crate::runner::Step;
 use crate::trust::TrustState;
 
 /// Resolve an editor command to open `file` at `line`.

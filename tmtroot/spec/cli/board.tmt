@@ -61,3 +61,11 @@ An extension that is marked `Allowed` is queried with `sisho-<word> --sisho-boar
 - `gauge`: Optional `{ "label": "...", "percent": 0..=100 }`
 - `items`: List of `{ "label": "...", "value": "...", "status": "pass|warn|fail|info", "detail": "..." }`
 - `summary`: Optional fallback summary text for the preview pane
+
+=[ Crate Architecture ]
+
+The `sisho-board` workspace is structured into four dependency layers enforced by `.writ.tmt`:
+- **Layer 0**: `sisho-board-sdk` (Board Pane JSON schema) and `sisho-board-run` (jobserver-gated `Step` subprocess runner, sole owner of `std::process` in `crates/*`).
+- **Layer 1**: `sisho-board-health` (six-pillar `Vault Readiness & Health` engine and `tomet check-links` report parser) and `sisho-board-core` (state `Model`, `sisho` trust delegation, extension discovery, editor resolution, and `board.json` config).
+- **Layer 2**: `sisho-board-tui` (Ratatui rendering, terminal `Screen` guard, and interactive event loop; sole owner of `ratatui` and `crossterm` in `crates/*`).
+- **Layer 3**: `app` (`sisho-board` CLI binary).

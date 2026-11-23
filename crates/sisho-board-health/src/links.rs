@@ -4,9 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-
-use crate::runner::{Outcome, Status};
-use crate::tools::check_links_step;
+use sisho_board_run::{Outcome, Status, Step};
 
 /// A line and a column, both counted from 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,7 +42,10 @@ pub struct Report {
 
 /// Check the links under `dir` by running `tomet check-links --json`.
 pub fn check(dir: &Path) -> Result<Report, String> {
-    report_of(check_links_step(dir).run())
+    let step = Step::new("tomet check-links", "tomet")
+        .args(["check-links", "--json"])
+        .arg(dir);
+    report_of(step.run())
 }
 
 fn report_of(outcome: Outcome) -> Result<Report, String> {

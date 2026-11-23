@@ -51,8 +51,8 @@ fn main() -> ExitCode {
     let _ = init_jobserver();
 
     if cli.report || cli.json {
-        let links_report = sisho_board_core::links::check(&cli.path).ok();
-        let health = sisho_board_core::health::analyze(&cli.path, links_report.as_ref());
+        let links_report = sisho_board_health::links::check(&cli.path).ok();
+        let health = sisho_board_health::health::analyze(&cli.path, links_report.as_ref());
         if cli.json {
             match serde_json::to_string_pretty(&health) {
                 Ok(json) => {
@@ -76,7 +76,7 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    match sisho_board_core::run(cli.path) {
+    match sisho_board_tui::run(cli.path) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("sisho-board: {error:#}");
@@ -99,6 +99,6 @@ fn init_jobserver() -> std::io::Result<()> {
             jobserver::Client::new(limit.saturating_sub(1))?
         }
     };
-    sisho_board_core::runner::init_gate(client);
+    sisho_board_run::init_gate(client);
     Ok(())
 }

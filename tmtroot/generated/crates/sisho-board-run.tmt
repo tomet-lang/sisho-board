@@ -1,0 +1,43 @@
+::kind(api)
+
+::meta(crate: sisho-board-run, dependencies: (), dependents: (sisho-board, sisho-board-core, sisho-board-health, sisho-board-tui))
+
+=[sisho-board-run]
+
+Subprocess runner and parallel job execution for `sisho-board`.
+
+==[Structs]
+
+===[struct Step]
+
+A command ready to be run.
+
+===[struct Outcome]
+
+What a single step produced.
+
+==[Enums]
+
+===[enum Status]
+
+How a step ended.
+
+==[Functions]
+
+===[fn init_gate]
+
+Initialize the process-wide jobserver gate.
+
+===[fn run_parallel_streaming]
+
+Run `steps` in parallel and invoke `on_complete(index, outcome)` as each step finishes.
+Returns the outcomes in their original plan order.
+
+===[fn run_with_timeout]
+
+Run a program with arguments and a timeout, returning `Some(stdout)` if it exits 0 within `timeout`.
+
+===[fn run_with_timeout_env]
+
+Run a program with arguments, additional environment variables, and a timeout,
+returning `Some(stdout)` if it exits 0 within `timeout`.

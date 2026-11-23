@@ -7,12 +7,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
+use sisho_board_core::model::{FocusedPane, Model, PreviewSource, StepSlot};
+use sisho_board_core::tools::Verdict;
+use sisho_board_core::trust::TrustState;
+use sisho_board_run::Status;
 use sisho_board_sdk::BoardStatus;
-
-use crate::model::{FocusedPane, Model, PreviewSource, StepSlot};
-use crate::runner::Status;
-use crate::tools::Verdict;
-use crate::trust::TrustState;
 
 /// Render the complete sisho-board interface (Board + Counter).
 pub fn draw(f: &mut Frame, model: &Model) {
@@ -324,7 +323,7 @@ fn draw_broken_links(f: &mut Frame, area: Rect, model: &Model) {
 
 fn draw_right_column(f: &mut Frame, area: Rect, model: &Model) {
     let cmd_count = if model.check_slots.is_empty() {
-        crate::tools::check_steps(&model.dir).len()
+        sisho_board_core::tools::check_steps(&model.dir).len()
     } else {
         model.check_slots.len()
     };
@@ -370,7 +369,7 @@ fn draw_health(f: &mut Frame, area: Rect, model: &Model) {
 
     if let Some(report) = &model.health_report {
         let bar = format_gauge_bar(report.overall_percent, 10);
-        let bar_color = match crate::health::status_for_percent(report.overall_percent) {
+        let bar_color = match sisho_board_health::status_for_percent(report.overall_percent) {
             BoardStatus::Pass => Color::Green,
             BoardStatus::Warn => Color::Yellow,
             BoardStatus::Fail => Color::Red,

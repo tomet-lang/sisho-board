@@ -1,0 +1,72 @@
+::kind(api)
+
+::meta(crate: sisho-board-health, dependencies: (sisho-board-run, sisho-board-sdk), dependents: (sisho-board, sisho-board-core, sisho-board-tui))
+
+=[sisho-board-health]
+
+Vault readiness, health analysis, and link integrity reporting for `sisho-board`.
+
+==[Module health]
+
+Vault and repository Readiness & Health (`%`) measurement engine.
+
+Evaluates six deterministic pillars across a Tomet vault or repository:
+1. @strong[Tomet Coverage]: `.tmt` source files + generated `.md` artifacts vs unmigrated `.md` files.
+2. @strong[`::id` Declaration]: share of eligible `.tmt` documents declaring `::id(...)`.
+3. @strong[`::kind` & Blueprint Coverage]: share of eligible `.tmt` documents declaring `::kind(...)` or `::blueprint(...)`, enriched with `tomet stats --json`.
+4. @strong[Link Health]: unbroken links vs total checked links from `tomet check-links --json`.
+5. @strong[Writ & Catasto Governance]: presence of `.writ.tmt`, guarded `@rule(...)` blocks, and `catasto.lock` consistency.
+6. @strong[Cleanliness & Freshness]: absence of `@draft` markers and validation errors/warnings, plus documentation vs code freshness.
+
+===[Structs]
+
+====[struct PillarMetric]
+
+Score and diagnostic detail for one readiness pillar.
+
+====[struct HealthReport]
+
+Complete Readiness & Health report for a vault or repository.
+
+===[Functions]
+
+====[fn status_for_percent]
+
+Status threshold for a percentage (`100` -> `Pass`, `70..=99` -> `Warn`, `<70` -> `Fail`).
+
+====[fn analyze]
+
+Analyze the vault/repository at `dir`, invoking `tomet stats --json` if `tomet` is available.
+
+====[fn analyze_with_stats]
+
+Analyze the vault/repository at `dir` with an optional pre-fetched `tomet stats --json` payload.
+
+==[Module links]
+
+The link check as the board shows it: what `tomet check-links --json`
+reports about the links of a vault that point at nothing.
+
+===[Structs]
+
+====[struct Position]
+
+A line and a column, both counted from 1.
+
+====[struct BrokenLink]
+
+A link whose target does not exist.
+
+====[struct Unreadable]
+
+A document that could not be looked at.
+
+====[struct Report]
+
+What a run found.
+
+===[Functions]
+
+====[fn check]
+
+Check the links under `dir` by running `tomet check-links --json`.

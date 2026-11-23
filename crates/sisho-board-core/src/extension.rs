@@ -12,11 +12,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use sisho_board_run::run_with_timeout_env;
 use sisho_board_sdk::{BOARD_PANE_FLAG, BoardPane};
 use sisho_sdk::{EXTENSION_INFO_FLAG, ExtensionInfo};
 
 use crate::model::ExtensionItem;
-use crate::runner::run_with_timeout_env;
 use crate::trust::{TrustState, fetch_extensions};
 
 /// True if `word` is a valid extension name (`[a-z0-9-]+`, not starting with `-`).
@@ -280,8 +280,10 @@ mod tests {
     fn discover_uses_sisho_list_json_and_excludes_board() {
         use std::os::unix::fs::PermissionsExt;
 
-        let temp_dir =
-            std::env::temp_dir().join(format!("sisho-board-discover-test-{}", std::process::id()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "sisho-board-discover-test-{}",
+            crate::unique_test_suffix()
+        ));
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
 
