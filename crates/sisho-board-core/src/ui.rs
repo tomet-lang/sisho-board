@@ -886,7 +886,47 @@ fn draw_counter(f: &mut Frame, area: Rect, model: &Model) {
 
     let mut lines = Vec::new();
 
-    if model.confirm_fix {
+    if let Some(prompt) = &model.pending_trust {
+        lines.push(Line::from(vec![Span::styled(
+            format!(
+                "Trust for 'sisho-{}' ({}):",
+                prompt.word,
+                prompt.canonical_path.display()
+            ),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "[y] Allow (execute)",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   "),
+            Span::styled(
+                "[d] Deny (block)",
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   "),
+            Span::styled(
+                "[u] Untrusted",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   "),
+            Span::styled(
+                "[n/Esc] Cancel",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    } else if model.confirm_fix {
         lines.push(Line::from(vec![
             Span::styled(
                 " Apply fixes across the project? (writes files)  ",
@@ -928,7 +968,7 @@ fn draw_counter(f: &mut Frame, area: Rect, model: &Model) {
                         "[a/Enter]",
                         Style::default().fg(Color::Yellow),
                     ));
-                    action_spans.push(Span::raw(" Toggle Trust   "));
+                    action_spans.push(Span::raw(" Change Trust   "));
                 }
                 action_spans.push(Span::styled("[↑/k ↓/j]", Style::default().fg(Color::Cyan)));
                 action_spans.push(Span::raw(" Move   "));

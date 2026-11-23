@@ -8,11 +8,49 @@ The operating dashboard and board for the Tomet ecosystem (`sisho-board`).
 
 Two-tier design:
 
-- @strong[Board]: Status of tools, extensions (with explicit user trust via `~/.config/sisho/board.json`),
+- @strong[Board]: Status of tools, extensions (with explicit user trust via `sisho`),
 
 extension board panes (`--sisho-board-pane`), integrity check outcomes, and broken links.
 
-- @strong[Counter]: Action prompt bar to run check, fix, check-links, toggle extension trust, or open desk.
+- @strong[Counter]: Action prompt bar to run check, fix, check-links, manage extension trust, or open desk.
+
+==[Module config]
+
+Portable UI board configuration (`$SISHO_CONFIG_DIR/board.json` or `$XDG_CONFIG_HOME/sisho/board/board.json`).
+
+`BoardConfig` stores only portable UI preferences (such as hidden extension panes)
+with zero binary paths and zero trust state. Extension execution trust is owned
+exclusively by `sisho` (`~/.local/share/sisho/trust.json`).
+
+===[Structs]
+
+====[struct BoardConfig]
+
+Portable UI customization for `sisho-board` (`board.json`).
+
+===[Functions]
+
+====[fn default_config_path]
+
+Resolve the default path to `board.json`:
+
+- `$SISHO_CONFIG_DIR/board.json` if `SISHO_CONFIG_DIR` is set and non-empty
+- otherwise `$XDG_CONFIG_HOME/sisho/board/board.json`
+- otherwise `$HOME/.config/sisho/board/board.json`
+
+Matches `sisho_sdk::config_dir("board")`.
+
+====[fn resolve_config_path_with]
+
+Resolve the path to `board.json` using a custom environment variable lookup function.
+
+Matches `sisho_sdk::config_dir("board")`.
+
+===[Constants]
+
+====[const CURRENT_BOARD_CONFIG_SCHEMA_VERSION]
+
+Current schema version for `board.json`.
 
 ==[Module editor]
 
@@ -48,17 +86,35 @@ whose \[`TrustState`\] is \[`TrustState::Allowed`\].
 
 True if `word` is a valid extension name (`[a-z0-9-]+`, not starting with `-`).
 
+====[fn discover]
+
+Discover extensions by delegating to `<sisho_program> --list --json`, falling
+back safely to \[`scan`\] with all extensions marked \[`TrustState::Untrusted`\]
+if `sisho` is missing or older.
+
 ====[fn scan]
 
 Scan `PATH` for `sisho-<word>` extension executables (excluding `sisho-board` itself).
 
 Never executes any discovered binary. All returned items start with
-\[`TrustState::Untrusted`\]; the caller applies \[`crate::trust::TrustConfig`\]
-before deciding whether any extension may be queried.
+\[`TrustState::Untrusted`\].
 
 ====[fn scan_in]
 
 Scan specific directories for `sisho-<word>` extension executables.
+
+====[fn extension_dir_envs]
+
+Compute `SISHO_CONFIG_DIR` and `SISHO_DATA_DIR` environment variable pairs for `word`.
+
+Resolves `$XDG_CONFIG_HOME/sisho/<word>` (fallback `$HOME/.config/sisho/<word>`)
+and `$XDG_DATA_HOME/sisho/<word>` (fallback `$HOME/.local/share/sisho/<word>`),
+ignoring `sisho-board`'s own `SISHO_CONFIG_DIR` and `SISHO_DATA_DIR` so board's
+directories never leak into queried extensions.
+
+====[fn extension_dir_envs_with]
+
+Compute `SISHO_CONFIG_DIR` and `SISHO_DATA_DIR` for `word` using a custom env lookup.
 
 ====[fn query_info]
 
@@ -143,6 +199,10 @@ State model and background worker coordination for `sisho-board`.
 
 An extension discovered on `PATH` and presented on the Board.
 
+====[struct PendingTrustPrompt]
+
+Pending confirmation prompt for changing an extension's trust state via `sisho`.
+
 ====[struct ToolStatus]
 
 Status of a core ecosystem tool (`tomet`, `twrit`, `catasto`).
@@ -208,6 +268,11 @@ Returns the outcomes in their original plan order.
 
 Run a program with arguments and a timeout, returning `Some(stdout)` if it exits 0 within `timeout`.
 
+====[fn run_with_timeout_env]
+
+Run a program with arguments, additional environment variables, and a timeout,
+returning `Some(stdout)` if it exits 0 within `timeout`.
+
 ==[Module screen]
 
 Terminal guard: manages raw mode, alternate screen, and mouse capture.
@@ -260,18 +325,18 @@ The steps of `sisho fix` for `path`.
 
 ==[Module trust]
 
-User trust configuration (`~/.config/sisho/board.json`).
+Extension trust delegation to the `sisho` CLI.
 
-By default, discovered extensions on `PATH` are \[`TrustState::Untrusted`\].
-`sisho-board` never executes an extension subprocess (`--sisho-extension-info`,
-`--sisho-board-pane`, editor launch, or terminal handover) unless the user
-has explicitly marked it \[`TrustState::Allowed`\].
+`sisho` is the sole owner of `~/.local/share/sisho/trust.json`.
+`sisho-board` never reads or writes `trust.json` directly; instead it queries
+`sisho --list --json` for discovered extensions and trust states, and delegates
+trust updates to `sisho --allow`, `sisho --deny`, or `sisho --untrust`.
 
 ===[Structs]
 
-====[struct TrustConfig]
+====[struct SishoExtensionEntry]
 
-Persistent trust configuration stored at `~/.config/sisho/board.json`.
+Extension entry emitted by `sisho --list --json`.
 
 ===[Enums]
 
@@ -281,21 +346,27 @@ Trust permission state for an extension discovered on `PATH`.
 
 ===[Functions]
 
-====[fn default_config_path]
+====[fn default_sisho_program]
 
-Resolve the default path to `board.json`:
-`$XDG_CONFIG_HOME/sisho/board.json` if `XDG_CONFIG_HOME` is set and non-empty,
-otherwise `$HOME/.config/sisho/board.json`.
+Resolve the `sisho` CLI executable (`SISHO_BIN` if set and non-empty, otherwise `"sisho"`).
 
-====[fn resolve_config_path_with]
+====[fn resolve_sisho_program_with]
 
-Resolve the path to `board.json` using a custom environment variable lookup function.
+Resolve the `sisho` CLI executable using a custom environment lookup function.
 
-===[Constants]
+====[fn fetch_extensions]
 
-====[const CURRENT_TRUST_SCHEMA_VERSION]
+Query `<sisho_program> --list --json` and parse the returned JSON array.
 
-Current schema version for `board.json`.
+Returns `None` if `sisho` is missing, exits non-zero (e.g. an older `sisho`
+that does not support `--list --json`), times out, or emits invalid JSON.
+
+====[fn set_extension_trust]
+
+Update extension trust via `<sisho_program> --allow|--deny|--untrust <target>`.
+
+Passing the extension's `canonical_path` as `target` ensures `sisho` updates
+the exact binary path.
 
 ==[Module ui]
 

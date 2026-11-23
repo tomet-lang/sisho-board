@@ -29,7 +29,7 @@ It runs standalone as `sisho-board [path]`, or through `sisho` as `sisho board [
    - The interactive prompt bar at the bottom for choosing and executing tasks:
      - `Tab` / `BackTab`: Cycle focus between Board panes (`Integrity & Checks`, `Vault Readiness & Health`, `Extension Panes` when present, `Tools & Extensions`, `Broken Links`, and `Step Output Preview`).
      - `↑` / `k`, `↓` / `j`: Navigate selection or scroll within the focused pane.
-     - `a` / `Enter` (when focused on `Tools & Extensions`): Toggle trust state (`Untrusted` -> `Allowed` -> `Denied` -> `Allowed`) for the selected extension and persist immediately to `~/.config/sisho/board.json`.
+     - `a` / `Enter` (when focused on `Tools & Extensions`): Open the trust confirmation prompt (`[y] Allow / [d] Deny / [u] Untrusted / [n/Esc] Cancel`) for the selected extension. On confirmation, `sisho-board` delegates the update to `sisho --allow`, `sisho --deny`, or `sisho --untrust` using the extension's canonical path.
      - `Enter` / `e` (when focused on `Broken Links`): Open the selected link's source file in an editor at the broken line, restoring the board and re-verifying links on return.
      - `c`: Execute check steps, re-evaluate Vault Readiness & Health, and refresh allowed extension board panes.
      - `f`: Execute fix steps. Always prompts for confirmation (`Apply fixes? [y/N]`) before any file write occurs, and refreshes Vault Readiness & Health upon completion.
@@ -42,10 +42,16 @@ It runs standalone as `sisho-board [path]`, or through `sisho` as `sisho board [
 - `sisho-board --report [path]` (`-r`): Evaluates the six readiness pillars and link health for `path` (default `.`) without opening the TUI, prints a human-readable summary with the `%` gauge bar and actionable findings for any non-100% pillars, and exits 0.
 - `sisho-board --json [path]`: Evaluates the six readiness pillars and link health for `path` without opening the TUI, prints the `HealthReport` JSON object to standard output, and exits 0.
 
-=[ Extension Trust (`~/.config/sisho/board.json`) ]
+=[ Extension Trust (`~/.local/share/sisho/trust.json` via `sisho`) ]
 
-- **Config Location**: `$XDG_CONFIG_HOME/sisho/board.json` if `XDG_CONFIG_HOME` is set and non-empty; otherwise `$HOME/.config/sisho/board.json`.
-- **Default Untrusted Policy**: Scanning `PATH` never executes any binary. An extension absent from `board.json` has state `Untrusted`. `sisho-board` never executes an `Untrusted` or `Denied` extension for `--sisho-extension-info`, `--sisho-board-pane`, editor fallback, or `d` handover.
+- **Trust Ownership**: `sisho` is the sole owner of `~/.local/share/sisho/trust.json` (`$XDG_DATA_HOME/sisho/trust.json`). `sisho-board` never reads or writes `trust.json` directly; instead it queries `sisho --list --json` on startup and delegates trust changes via `sisho --allow <path>`, `sisho --deny <path>`, or `sisho --untrust <path>` after explicit user confirmation (`[y] Allow / [d] Deny / [u] Untrusted / [n/Esc] Cancel`).
+- **Default Untrusted Policy**: If `sisho` is missing or older, `sisho-board` falls back to scanning `PATH` without executing any binary and treats every extension as `Untrusted`. `sisho-board` never executes an `Untrusted` or `Denied` extension for `--sisho-extension-info`, `--sisho-board-pane`, editor fallback, or `d` handover.
+- **Per-Extension Environments**: When querying or launching an `Allowed` extension, `sisho-board` sets `SISHO_CONFIG_DIR` (`$XDG_CONFIG_HOME/sisho/<word>` or `$HOME/.config/sisho/<word>`) and `SISHO_DATA_DIR` (`$XDG_DATA_HOME/sisho/<word>` or `$HOME/.local/share/sisho/<word>`).
+
+=[ Board UI Configuration (`~/.config/sisho/board/board.json`) ]
+
+- **Config Location**: `$SISHO_CONFIG_DIR/board.json` if `SISHO_CONFIG_DIR` is set and non-empty; otherwise `$XDG_CONFIG_HOME/sisho/board/board.json` if `XDG_CONFIG_HOME` is set and non-empty; otherwise `$HOME/.config/sisho/board/board.json` (matching `sisho_sdk::config_dir("board")`).
+- **Portable UI State**: `board.json` stores only portable UI preferences (such as `hidden_extension_panes`), with zero binary paths and zero trust state.
 
 =[ Board Pane Protocol (`--sisho-board-pane`) ]
 

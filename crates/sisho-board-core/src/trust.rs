@@ -1,29 +1,23 @@
-//! User trust configuration (`~/.config/sisho/board.json`).
+//! Extension trust delegation to the `sisho` CLI.
 //!
-//! By default, discovered extensions on `PATH` are [`TrustState::Untrusted`].
-//! `sisho-board` never executes an extension subprocess (`--sisho-extension-info`,
-//! `--sisho-board-pane`, editor launch, or terminal handover) unless the user
-//! has explicitly marked it [`TrustState::Allowed`].
+//! `sisho` is the sole owner of `~/.local/share/sisho/trust.json`.
+//! `sisho-board` never reads or writes `trust.json` directly; instead it queries
+//! `sisho --list --json` for discovered extensions and trust states, and delegates
+//! trust updates to `sisho --allow`, `sisho --deny`, or `sisho --untrust`.
 
-use std::collections::BTreeMap;
-use std::fs;
-use std::io;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-/// Current schema version for `board.json`.
-pub const CURRENT_TRUST_SCHEMA_VERSION: u32 = 1;
-
-const fn default_schema_version() -> u32 {
-    CURRENT_TRUST_SCHEMA_VERSION
-}
+use crate::runner::{Status, Step, run_with_timeout};
 
 /// Trust permission state for an extension discovered on `PATH`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrustState {
-    /// Not yet decided by the user (default when absent from `board.json`).
+    /// Not yet decided by the user (default when absent from `trust.json`).
     /// Never executed automatically.
     #[default]
     Untrusted,
@@ -40,181 +34,185 @@ impl TrustState {
         matches!(self, Self::Allowed)
     }
 
-    /// Cycle trust state when the user toggles permission in the TUI:
-    /// - `Untrusted` -> `Allowed`
-    /// - `Allowed` -> `Denied`
-    /// - `Denied` -> `Allowed`
-    pub fn toggle(self) -> Self {
+    /// Lowercase string representation (`"untrusted"`, `"allowed"`, `"denied"`).
+    pub fn as_str(self) -> &'static str {
         match self {
-            Self::Untrusted => Self::Allowed,
-            Self::Allowed => Self::Denied,
-            Self::Denied => Self::Allowed,
+            Self::Untrusted => "untrusted",
+            Self::Allowed => "allowed",
+            Self::Denied => "denied",
         }
     }
 }
 
-/// Persistent trust configuration stored at `~/.config/sisho/board.json`.
+/// Extension entry emitted by `sisho --list --json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TrustConfig {
-    /// Schema version, currently 1.
-    #[serde(default = "default_schema_version")]
-    pub schema_version: u32,
-    /// Map of extension word (e.g. `"desk"`) to its [`TrustState`].
+pub struct SishoExtensionEntry {
+    /// Extension word (e.g. `"desk"` for `sisho-desk`).
+    pub word: String,
+    /// Path to the executable on `PATH`.
+    pub path: PathBuf,
+    /// Canonicalized binary path used by `sisho` to key trust entries.
+    pub canonical_path: PathBuf,
+    /// Discovery status (`"active"`, `"shadowed_by_builtin"`, `"shadowed_by_duplicate"`).
+    pub status: String,
+    /// Name or path of the shadowing builtin/binary, if shadowed.
     #[serde(default)]
-    pub extensions: BTreeMap<String, TrustState>,
+    pub shadowed_by: Option<String>,
+    /// Current trust state reported by `sisho`.
+    #[serde(default)]
+    pub trust: TrustState,
 }
 
-impl Default for TrustConfig {
-    fn default() -> Self {
-        Self {
-            schema_version: CURRENT_TRUST_SCHEMA_VERSION,
-            extensions: BTreeMap::new(),
-        }
-    }
+/// Resolve the `sisho` CLI executable (`SISHO_BIN` if set and non-empty, otherwise `"sisho"`).
+pub fn default_sisho_program() -> PathBuf {
+    resolve_sisho_program_with(|key| std::env::var_os(key))
 }
 
-impl TrustConfig {
-    /// Create an empty trust configuration where all extensions are `Untrusted`.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Look up the trust state for `word`. Defaults to [`TrustState::Untrusted`] if not present.
-    pub fn trust_of(&self, word: &str) -> TrustState {
-        self.extensions.get(word).copied().unwrap_or(TrustState::Untrusted)
-    }
-
-    /// Set the trust state for `word`.
-    pub fn set_trust(&mut self, word: impl Into<String>, state: TrustState) {
-        let word = word.into();
-        match state {
-            TrustState::Untrusted => {
-                self.extensions.remove(&word);
-            }
-            TrustState::Allowed | TrustState::Denied => {
-                self.extensions.insert(word, state);
-            }
-        }
-    }
-
-    /// Load `TrustConfig` from `path`. Returns [`TrustConfig::default()`] if the
-    /// file does not exist or cannot be parsed.
-    pub fn load_from(path: &Path) -> Self {
-        let Ok(contents) = fs::read_to_string(path) else {
-            return Self::default();
-        };
-        serde_json::from_str(&contents).unwrap_or_default()
-    }
-
-    /// Save `TrustConfig` to `path` as pretty-printed JSON, creating parent
-    /// directories if needed.
-    pub fn save_to(&self, path: &Path) -> io::Result<()> {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent)?;
-        }
-        let mut json = serde_json::to_string_pretty(self)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-        json.push('\n');
-        fs::write(path, json)
-    }
-}
-
-/// Resolve the default path to `board.json`:
-/// `$XDG_CONFIG_HOME/sisho/board.json` if `XDG_CONFIG_HOME` is set and non-empty,
-/// otherwise `$HOME/.config/sisho/board.json`.
-pub fn default_config_path() -> Option<PathBuf> {
-    resolve_config_path_with(|key| std::env::var(key).ok())
-}
-
-/// Resolve the path to `board.json` using a custom environment variable lookup function.
-pub fn resolve_config_path_with<F>(lookup: F) -> Option<PathBuf>
+/// Resolve the `sisho` CLI executable using a custom environment lookup function.
+pub fn resolve_sisho_program_with<F>(lookup: F) -> PathBuf
 where
-    F: Fn(&str) -> Option<String>,
+    F: Fn(&str) -> Option<OsString>,
 {
-    if let Some(xdg) = lookup("XDG_CONFIG_HOME").filter(|s| !s.trim().is_empty()) {
-        return Some(PathBuf::from(xdg).join("sisho").join("board.json"));
+    if let Some(bin) = lookup("SISHO_BIN").filter(|s| !s.to_string_lossy().trim().is_empty()) {
+        return PathBuf::from(bin);
     }
-    if let Some(home) = lookup("HOME").filter(|s| !s.trim().is_empty()) {
-        return Some(
-            PathBuf::from(home)
-                .join(".config")
-                .join("sisho")
-                .join("board.json"),
-        );
+    PathBuf::from("sisho")
+}
+
+/// Query `<sisho_program> --list --json` and parse the returned JSON array.
+///
+/// Returns `None` if `sisho` is missing, exits non-zero (e.g. an older `sisho`
+/// that does not support `--list --json`), times out, or emits invalid JSON.
+pub fn fetch_extensions(sisho_program: &Path) -> Option<Vec<SishoExtensionEntry>> {
+    let out = run_with_timeout(
+        sisho_program,
+        ["--list", "--json"],
+        Duration::from_millis(2000),
+    )?;
+    serde_json::from_str(&out).ok()
+}
+
+/// Update extension trust via `<sisho_program> --allow|--deny|--untrust <target>`.
+///
+/// Passing the extension's `canonical_path` as `target` ensures `sisho` updates
+/// the exact binary path.
+pub fn set_extension_trust(
+    sisho_program: &Path,
+    target: &Path,
+    new_state: TrustState,
+) -> Result<(), String> {
+    let flag = match new_state {
+        TrustState::Allowed => "--allow",
+        TrustState::Denied => "--deny",
+        TrustState::Untrusted => "--untrust",
+    };
+
+    let outcome = Step::new("sisho trust", sisho_program)
+        .arg(flag)
+        .arg(target)
+        .run();
+
+    if outcome.is_pass() {
+        Ok(())
+    } else {
+        let stderr = outcome.stderr.trim();
+        if !stderr.is_empty() {
+            Err(stderr.to_string())
+        } else {
+            Err(match outcome.status {
+                Status::Failed { code } => format!("sisho exited with status {code}"),
+                Status::Signalled { signal } => format!("sisho terminated by signal {signal}"),
+                Status::NotFound => {
+                    format!("sisho executable '{}' not found", sisho_program.display())
+                }
+                Status::CouldNotStart { reason } => reason,
+                Status::Passed => unreachable!(),
+            })
+        }
     }
-    None
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
-    fn resolve_config_path_prefers_xdg_over_home() {
-        let path = resolve_config_path_with(|key| match key {
-            "XDG_CONFIG_HOME" => Some("/custom/xdg".to_string()),
-            "HOME" => Some("/home/alice".to_string()),
+    fn resolve_sisho_program_uses_sisho_bin_env_when_non_empty() {
+        let from_env = resolve_sisho_program_with(|key| match key {
+            "SISHO_BIN" => Some(OsString::from("/custom/bin/sisho")),
             _ => None,
         });
-        assert_eq!(path, Some(PathBuf::from("/custom/xdg/sisho/board.json")));
+        assert_eq!(from_env, PathBuf::from("/custom/bin/sisho"));
 
-        let fallback = resolve_config_path_with(|key| match key {
-            "XDG_CONFIG_HOME" => Some("".to_string()),
-            "HOME" => Some("/home/alice".to_string()),
+        let empty = resolve_sisho_program_with(|key| match key {
+            "SISHO_BIN" => Some(OsString::from("  ")),
             _ => None,
         });
-        assert_eq!(
-            fallback,
-            Some(PathBuf::from("/home/alice/.config/sisho/board.json"))
-        );
+        assert_eq!(empty, PathBuf::from("sisho"));
+
+        let unset = resolve_sisho_program_with(|_| None);
+        assert_eq!(unset, PathBuf::from("sisho"));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn trust_state_defaults_to_untrusted_and_toggles_cleanly() {
-        let mut cfg = TrustConfig::new();
-        assert_eq!(cfg.trust_of("desk"), TrustState::Untrusted);
+    fn fetch_extensions_and_set_extension_trust_delegate_to_sisho_binary() {
+        use std::os::unix::fs::PermissionsExt;
 
-        let next = cfg.trust_of("desk").toggle();
-        assert_eq!(next, TrustState::Allowed);
-        cfg.set_trust("desk", next);
-        assert_eq!(cfg.trust_of("desk"), TrustState::Allowed);
-
-        let denied = cfg.trust_of("desk").toggle();
-        assert_eq!(denied, TrustState::Denied);
-        cfg.set_trust("desk", denied);
-        assert_eq!(cfg.trust_of("desk"), TrustState::Denied);
-
-        let allowed_again = cfg.trust_of("desk").toggle();
-        assert_eq!(allowed_again, TrustState::Allowed);
-    }
-
-    #[test]
-    fn load_and_save_board_json_roundtrip() {
         let temp_dir =
-            std::env::temp_dir().join(format!("sisho-board-trust-test-{}", std::process::id()));
+            std::env::temp_dir().join(format!("sisho-board-trust-cli-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&temp_dir);
-        let config_path = temp_dir.join("sisho").join("board.json");
+        fs::create_dir_all(&temp_dir).unwrap();
 
-        // Missing file loads as default (all untrusted)
-        let loaded_missing = TrustConfig::load_from(&config_path);
-        assert_eq!(loaded_missing, TrustConfig::default());
+        let log_file = temp_dir.join("calls.log");
+        let mock_sisho = temp_dir.join("sisho");
+        let script = format!(
+            "#!/bin/sh\n\
+             echo \"$@\" >> \"{}\"\n\
+             if [ \"$1\" = \"--list\" ] && [ \"$2\" = \"--json\" ]; then\n\
+               echo '[{{\"word\":\"board\",\"path\":\"/bin/sisho-board\",\"canonical_path\":\"/bin/sisho-board\",\"status\":\"active\",\"shadowed_by\":null,\"trust\":\"allowed\"}},{{\"word\":\"desk\",\"path\":\"/bin/sisho-desk\",\"canonical_path\":\"/real/sisho-desk\",\"status\":\"active\",\"shadowed_by\":null,\"trust\":\"untrusted\"}}]'\n\
+               exit 0\n\
+             fi\n\
+             if [ \"$1\" = \"--allow\" ] || [ \"$1\" = \"--deny\" ] || [ \"$1\" = \"--untrust\" ]; then\n\
+               exit 0\n\
+             fi\n\
+             echo 'unsupported flag' >&2\n\
+             exit 2\n",
+            log_file.display()
+        );
+        fs::write(&mock_sisho, script).unwrap();
+        fs::set_permissions(&mock_sisho, fs::Permissions::from_mode(0o755)).unwrap();
 
-        let mut cfg = TrustConfig::new();
-        cfg.set_trust("desk", TrustState::Allowed);
-        cfg.set_trust("suspicious", TrustState::Denied);
-        cfg.save_to(&config_path).unwrap();
+        let entries = fetch_extensions(&mock_sisho).expect("mock sisho --list --json should parse");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].word, "desk");
+        assert_eq!(entries[1].canonical_path, PathBuf::from("/real/sisho-desk"));
+        assert_eq!(entries[1].trust, TrustState::Untrusted);
 
-        let raw = fs::read_to_string(&config_path).unwrap();
-        assert!(raw.contains(r#""desk": "allowed""#), "{raw}");
-        assert!(raw.contains(r#""suspicious": "denied""#), "{raw}");
+        let target = Path::new("/real/sisho-desk");
+        set_extension_trust(&mock_sisho, target, TrustState::Allowed).unwrap();
+        set_extension_trust(&mock_sisho, target, TrustState::Denied).unwrap();
+        set_extension_trust(&mock_sisho, target, TrustState::Untrusted).unwrap();
 
-        let reloaded = TrustConfig::load_from(&config_path);
-        assert_eq!(reloaded, cfg);
-        assert_eq!(reloaded.trust_of("desk"), TrustState::Allowed);
-        assert_eq!(reloaded.trust_of("suspicious"), TrustState::Denied);
-        assert_eq!(reloaded.trust_of("unknown"), TrustState::Untrusted);
+        let log = fs::read_to_string(&log_file).unwrap();
+        let lines: Vec<&str> = log.lines().collect();
+        assert_eq!(
+            lines,
+            vec![
+                "--list --json",
+                "--allow /real/sisho-desk",
+                "--deny /real/sisho-desk",
+                "--untrust /real/sisho-desk",
+            ]
+        );
+
+        // Non-existent binary returns None on fetch and Err on set
+        let missing = temp_dir.join("missing-sisho");
+        assert!(fetch_extensions(&missing).is_none());
+        let err = set_extension_trust(&missing, target, TrustState::Allowed).unwrap_err();
+        assert!(err.contains("not found"), "{err}");
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

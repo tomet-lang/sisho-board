@@ -45,7 +45,7 @@ All Markdown files (`README.md`, `AGENTS.md`, `CONTRIBUTING.md`) are generated b
 
 The rules that follow:
 -| `sisho-board` depends on no internal `sisho` crate (only `sisho-sdk` for `--sisho-extension-info` and `jobserver-gate`). It communicates with `tomet`, `twrit`, `catasto`, and allowed `sisho-<word>` extensions via process boundaries.
--| `sisho-board` never executes any discovered `sisho-<word>` extension unless its trust state in `~/.config/sisho/board.json` is `Allowed`.
+-| `sisho-board` never executes any discovered `sisho-<word>` extension unless its trust state in `~/.local/share/sisho/trust.json` (queried via `sisho --list --json`) is `Allowed`.
 
 Read `CONTRIBUTING.md` for the contribution workflow, commit conventions, and verification steps.
 

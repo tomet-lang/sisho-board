@@ -4,13 +4,14 @@ use std::time::Duration;
 
 use sisho_board_sdk::{BoardGauge, BoardItem, BoardPane, BoardStatus};
 
+use crate::config::BoardConfig;
 use crate::health::{HealthReport, PillarMetric};
 use crate::links::{BrokenLink, Position, Report};
 use crate::model::{
-    ExtensionItem, FocusedPane, Model, PreviewSource, StepSlot, WorkerMessage,
+    ExtensionItem, FocusedPane, Model, PendingTrustPrompt, PreviewSource, StepSlot, WorkerMessage,
 };
 use crate::runner::{Outcome, Status};
-use crate::trust::{TrustConfig, TrustState};
+use crate::trust::TrustState;
 
 fn sample_pillar(key: &str, name: &str, percent: u8, detail: &str) -> PillarMetric {
     PillarMetric {
@@ -71,8 +72,9 @@ fn create_test_model() -> Model {
     let (sender, receiver) = std::sync::mpsc::channel();
     Model {
         dir: PathBuf::from("."),
-        config_path: None,
-        trust_config: TrustConfig::new(),
+        sisho_program: PathBuf::from("sisho"),
+        board_config_path: None,
+        board_config: BoardConfig::new(),
         tools: Vec::new(),
         extensions: vec![ExtensionItem::new(
             "desk",
@@ -100,6 +102,7 @@ fn create_test_model() -> Model {
         focused_pane: FocusedPane::Checks,
         preview_source: PreviewSource::CheckStep,
         confirm_fix: false,
+        pending_trust: None,
         message: None,
         is_checking: true,
         is_checking_links: false,
@@ -210,7 +213,7 @@ fn pane_focus_cycling_includes_health_and_updates_preview_source() {
 }
 
 #[test]
-fn untrusted_and_denied_extensions_are_never_executed_until_allowed() {
+fn untrusted_and_denied_extensions_are_never_executed_until_confirmed_allowed() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -223,8 +226,10 @@ fn untrusted_and_denied_extensions_are_never_executed_until_allowed() {
         fs::create_dir_all(&temp_dir).unwrap();
 
         let marker = temp_dir.join("executed.marker");
+        let env_log = temp_dir.join("ext_env.log");
+        let sisho_log = temp_dir.join("sisho_calls.log");
         let ext_path = temp_dir.join("sisho-audit");
-        let config_path = temp_dir.join("board.json");
+        let mock_sisho = temp_dir.join("sisho");
 
         let pane_json = BoardPane::new("Vault Audit")
             .with_gauge(BoardGauge::new("Readiness", 88))
@@ -236,9 +241,10 @@ fn untrusted_and_denied_extensions_are_never_executed_until_allowed() {
             .to_json()
             .unwrap();
 
-        let script = format!(
+        let ext_script = format!(
             "#!/bin/sh\n\
              touch \"{}\"\n\
+             printf '%s\\n%s\\n' \"$SISHO_CONFIG_DIR\" \"$SISHO_DATA_DIR\" > \"{}\"\n\
              if [ \"$1\" = \"--sisho-extension-info\" ]; then\n\
                echo '{{\"schema_version\":1,\"word\":\"audit\",\"version\":\"0.3.0\",\"about\":\"Audit extension\"}}'\n\
                exit 0\n\
@@ -248,14 +254,27 @@ fn untrusted_and_denied_extensions_are_never_executed_until_allowed() {
                exit 0\n\
              fi\n",
             marker.display(),
+            env_log.display(),
             pane_json
         );
-        fs::write(&ext_path, script).unwrap();
+        fs::write(&ext_path, ext_script).unwrap();
         fs::set_permissions(&ext_path, fs::Permissions::from_mode(0o755)).unwrap();
 
+        let sisho_script = format!(
+            "#!/bin/sh\n\
+             echo \"$@\" >> \"{}\"\n\
+             exit 0\n",
+            sisho_log.display()
+        );
+        fs::write(&mock_sisho, sisho_script).unwrap();
+        fs::set_permissions(&mock_sisho, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let canonical_ext = fs::canonicalize(&ext_path).unwrap();
+
         let mut model = create_test_model();
-        model.config_path = Some(config_path.clone());
+        model.sisho_program = mock_sisho.clone();
         model.extensions = vec![ExtensionItem::new("audit", ext_path.clone(), true, None)];
+        assert_eq!(model.extensions[0].canonical_path, canonical_ext);
 
         // 1. Untrusted: query_allowed_extensions must NOT execute the binary
         assert_eq!(model.extensions[0].trust, TrustState::Untrusted);
@@ -268,11 +287,25 @@ fn untrusted_and_denied_extensions_are_never_executed_until_allowed() {
         );
         assert!(model.extensions[0].board_pane.is_none());
 
-        // 2. Toggle Untrusted -> Allowed: saves board.json and queries extension
-        model.toggle_selected_extension_trust();
+        // 2. Opening trust prompt sets pending_trust WITHOUT executing or modifying trust
+        model.request_trust_prompt();
+        assert_eq!(
+            model.pending_trust,
+            Some(PendingTrustPrompt {
+                word: "audit".to_string(),
+                canonical_path: canonical_ext.clone(),
+                current_trust: TrustState::Untrusted,
+            })
+        );
+        assert_eq!(model.extensions[0].trust, TrustState::Untrusted);
+        assert!(!marker.exists(), "Prompting must not execute extension");
+        assert!(!sisho_log.exists(), "Prompting must not invoke sisho yet");
+
+        // 3. Confirm Allowed (y): invokes `sisho --allow <canonical_path>`, queries extension
+        //    and passes per-extension SISHO_CONFIG_DIR and SISHO_DATA_DIR
+        model.apply_pending_trust(TrustState::Allowed);
+        assert!(model.pending_trust.is_none());
         assert_eq!(model.extensions[0].trust, TrustState::Allowed);
-        let saved = TrustConfig::load_from(&config_path);
-        assert_eq!(saved.trust_of("audit"), TrustState::Allowed);
 
         for _ in 0..40 {
             model.poll_background();
@@ -287,16 +320,28 @@ fn untrusted_and_denied_extensions_are_never_executed_until_allowed() {
         assert!(model.extensions[0].board_pane.is_some());
         assert!(model.has_extension_panes());
 
-        // 3. Toggle Allowed -> Denied: saves board.json, clears pane, and never executes again
+        let envs = fs::read_to_string(&env_log).unwrap();
+        let env_lines: Vec<&str> = envs.lines().collect();
+        assert_eq!(env_lines.len(), 2, "{envs}");
+        assert!(
+            env_lines[0].ends_with("/sisho/audit"),
+            "expected SISHO_CONFIG_DIR ending in /sisho/audit, got {:?}",
+            env_lines[0]
+        );
+        assert!(
+            env_lines[1].ends_with("/sisho/audit"),
+            "expected SISHO_DATA_DIR ending in /sisho/audit, got {:?}",
+            env_lines[1]
+        );
+
+        // 4. Confirm Denied (d): invokes `sisho --deny <canonical_path>`, clears pane, never executes
         let _ = fs::remove_file(&marker);
-        model.toggle_selected_extension_trust();
+        model.request_trust_prompt();
+        model.apply_pending_trust(TrustState::Denied);
         assert_eq!(model.extensions[0].trust, TrustState::Denied);
         assert!(model.extensions[0].info.is_none());
         assert!(model.extensions[0].board_pane.is_none());
         assert!(!model.has_extension_panes());
-
-        let saved = TrustConfig::load_from(&config_path);
-        assert_eq!(saved.trust_of("audit"), TrustState::Denied);
 
         model.query_allowed_extensions();
         std::thread::sleep(Duration::from_millis(50));
@@ -306,6 +351,39 @@ fn untrusted_and_denied_extensions_are_never_executed_until_allowed() {
             "Denied extension must never be executed"
         );
 
+        // 5. Confirm Untrusted (u): invokes `sisho --untrust <canonical_path>`, transitions to Untrusted
+        model.request_trust_prompt();
+        model.apply_pending_trust(TrustState::Untrusted);
+        assert_eq!(model.extensions[0].trust, TrustState::Untrusted);
+        assert!(!marker.exists(), "Untrusted extension must never be executed");
+
+        let sisho_calls = fs::read_to_string(&sisho_log).unwrap();
+        let call_lines: Vec<&str> = sisho_calls.lines().collect();
+        assert_eq!(
+            call_lines,
+            vec![
+                format!("--allow {}", canonical_ext.display()),
+                format!("--deny {}", canonical_ext.display()),
+                format!("--untrust {}", canonical_ext.display()),
+            ]
+        );
+
         let _ = fs::remove_dir_all(&temp_dir);
     }
+}
+
+#[test]
+fn board_config_hidden_extension_panes_hides_pane_without_affecting_trust() {
+    let mut model = create_test_model();
+    model.extensions[0].trust = TrustState::Allowed;
+    model.extensions[0].board_pane = Some(BoardPane::new("Desk Pane"));
+    assert!(model.has_extension_panes());
+
+    model
+        .board_config
+        .hidden_extension_panes
+        .insert("desk".to_string());
+    assert!(!model.has_extension_panes());
+    assert!(model.active_extension_panes().is_empty());
+    assert_eq!(model.extensions[0].trust, TrustState::Allowed);
 }

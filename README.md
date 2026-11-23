@@ -48,19 +48,24 @@ Exit codes:
 
 In addition to the built-in standard cards, `sisho-board` discovers `sisho-<word>` extensions on `PATH` without executing them. By default, every discovered extension is `Untrusted`, and `sisho-board` never executes an untrusted or denied extension binary.
 
-1. **Interactive Trust Management (`~/.config/sisho/board.json`)**:
+1. **Interactive Trust Management (`~/.local/share/sisho/trust.json` via `sisho`)**:
 
-- Focus the `Tools & Extensions` pane (`Tab`) and press `a` or `Enter` on an extension to toggle its permission between `Allowed` and `Denied` (persisted in `$XDG_CONFIG_HOME/sisho/board.json` or `~/.config/sisho/board.json`).
+- Trust ownership belongs exclusively to `sisho` (`~/.local/share/sisho/trust.json`). `sisho-board` queries `sisho --list --json` to read extension trust states.
+- Focus the `Tools & Extensions` pane (`Tab`) and press `a` or `Enter` on an extension to open the confirmation prompt (`[y] Allow / [d] Deny / [u] Untrusted / [n/Esc] Cancel`), which delegates to `sisho --allow`, `sisho --deny`, or `sisho --untrust`.
 
-2. **External Extension Board Panes (`sisho-board-sdk`)**:
+2. **Board UI Configuration (`~/.config/sisho/board/board.json`)**:
 
-- Once an extension is marked `Allowed`, `sisho-board` queries `sisho-<word> --sisho-extension-info` and `sisho-<word> --sisho-board-pane <path>`.
+- Portable board UI preferences live at `$SISHO_CONFIG_DIR/board.json` or `$XDG_CONFIG_HOME/sisho/board/board.json` (fallback `$HOME/.config/sisho/board/board.json`), storing UI customization such as `hidden_extension_panes` with zero trust state or binary paths.
+
+3. **External Extension Board Panes (`sisho-board-sdk`)**:
+
+- Once an extension is marked `Allowed`, `sisho-board` queries `sisho-<word> --sisho-extension-info` and `sisho-<word> --sisho-board-pane <path>` (with per-extension `SISHO_CONFIG_DIR` and `SISHO_DATA_DIR`).
 - If the extension prints a `BoardPane` JSON object (defined in `sisho-board-sdk`), `sisho-board` renders its custom pane alongside the built-in standard cards.
 
 ## Workspace Layout
 
 - `app` (`sisho-board`) -- Main CLI binary (`sisho-board`). Layer 2.
-- `crates/sisho-board-core` (`sisho-board-core`) -- Core library holding the board state machine, built-in `Vault Readiness & Health` engine, trust persistence (`board.json`), runner, and Ratatui terminal UI. Layer 1.
+- `crates/sisho-board-core` (`sisho-board-core`) -- Core library holding the board state machine, built-in `Vault Readiness & Health` engine, `sisho` trust delegation, portable UI config (`board.json`), runner, and Ratatui terminal UI. Layer 1.
 - `crates/sisho-board-sdk` (`sisho-board-sdk`) -- Protocol types and helpers for `--sisho-board-pane` (`BoardPane`, `BoardGauge`, `BoardItem`, `BoardStatus`). Layer 0.
 
 ## Building and Testing

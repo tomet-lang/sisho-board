@@ -6,12 +6,13 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use sisho_board_sdk::{BoardItem, BoardPane};
 use sisho_sdk::ExtensionInfo;
 
+use crate::config::{BoardConfig, default_config_path};
 use crate::extension::{query_board_pane, query_info};
 use crate::health::{self, HealthReport, PillarMetric};
 use crate::links::{self, BrokenLink, Report};
 use crate::runner::{Outcome, run_parallel_streaming};
 use crate::tools::{Tool, Verdict, check_steps, fix_steps};
-use crate::trust::{TrustConfig, TrustState, default_config_path};
+use crate::trust::{TrustState, default_sisho_program, set_extension_trust};
 
 /// An extension discovered on `PATH` and presented on the Board.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,11 +21,13 @@ pub struct ExtensionItem {
     pub word: String,
     /// Full path to the executable on `PATH`.
     pub path: PathBuf,
+    /// Canonicalized path to the executable (used as trust key by `sisho`).
+    pub canonical_path: PathBuf,
     /// True if runnable as `sisho <word>` (not shadowed by a builtin).
     pub is_active: bool,
     /// Optional note such as `"shadowed by builtin"`.
     pub note: Option<String>,
-    /// User trust state from `board.json` (`Untrusted`, `Allowed`, `Denied`).
+    /// User trust state reported by `sisho` (`Untrusted`, `Allowed`, `Denied`).
     pub trust: TrustState,
     /// Metadata from `--sisho-extension-info` (populated only when `Allowed`).
     pub info: Option<ExtensionInfo>,
@@ -42,9 +45,12 @@ impl ExtensionItem {
         is_active: bool,
         note: Option<String>,
     ) -> Self {
+        let path = path.into();
+        let canonical_path = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         Self {
             word: word.into(),
-            path: path.into(),
+            path,
+            canonical_path,
             is_active,
             note,
             trust: TrustState::Untrusted,
@@ -53,6 +59,17 @@ impl ExtensionItem {
             is_querying: false,
         }
     }
+}
+
+/// Pending confirmation prompt for changing an extension's trust state via `sisho`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingTrustPrompt {
+    /// Extension word (e.g. `"desk"`).
+    pub word: String,
+    /// Canonicalized binary path passed to `sisho --allow|--deny|--untrust`.
+    pub canonical_path: PathBuf,
+    /// Current trust state before the user confirms a change.
+    pub current_trust: TrustState,
 }
 
 /// Status of a core ecosystem tool (`tomet`, `twrit`, `catasto`).
@@ -139,8 +156,9 @@ pub struct ExtensionPaneItemRef<'a> {
 /// The state of the board and counter.
 pub struct Model {
     pub dir: PathBuf,
-    pub config_path: Option<PathBuf>,
-    pub trust_config: TrustConfig,
+    pub sisho_program: PathBuf,
+    pub board_config_path: Option<PathBuf>,
+    pub board_config: BoardConfig,
     pub tools: Vec<ToolStatus>,
     pub extensions: Vec<ExtensionItem>,
     pub check_slots: Vec<StepSlot>,
@@ -156,6 +174,7 @@ pub struct Model {
     pub focused_pane: FocusedPane,
     pub preview_source: PreviewSource,
     pub confirm_fix: bool,
+    pub pending_trust: Option<PendingTrustPrompt>,
     pub message: Option<String>,
     pub is_checking: bool,
     pub is_checking_links: bool,
@@ -167,7 +186,9 @@ pub struct Model {
 }
 
 impl Model {
-    /// Create a new `Model` using the default user config path (`~/.config/sisho/board.json`).
+    /// Create a new `Model` using the default UI board config path
+    /// (`$SISHO_CONFIG_DIR/board.json` or `$XDG_CONFIG_HOME/sisho/board/board.json`)
+    /// and default `sisho` executable (`SISHO_BIN` or `"sisho"`).
     pub fn new(dir: PathBuf, extensions: Vec<ExtensionItem>) -> Self {
         Self::with_config_path(dir, extensions, default_config_path())
     }
@@ -175,17 +196,23 @@ impl Model {
     /// Create a new `Model` with an explicit or overridden `board.json` path.
     pub fn with_config_path(
         dir: PathBuf,
-        mut extensions: Vec<ExtensionItem>,
-        config_path: Option<PathBuf>,
+        extensions: Vec<ExtensionItem>,
+        board_config_path: Option<PathBuf>,
     ) -> Self {
-        let trust_config = config_path
-            .as_deref()
-            .map(TrustConfig::load_from)
-            .unwrap_or_default();
+        Self::with_options(dir, extensions, board_config_path, default_sisho_program())
+    }
 
-        for ext in &mut extensions {
-            ext.trust = trust_config.trust_of(&ext.word);
-        }
+    /// Create a new `Model` with explicit `board.json` path and `sisho` executable.
+    pub fn with_options(
+        dir: PathBuf,
+        extensions: Vec<ExtensionItem>,
+        board_config_path: Option<PathBuf>,
+        sisho_program: PathBuf,
+    ) -> Self {
+        let board_config = board_config_path
+            .as_deref()
+            .map(BoardConfig::load_from)
+            .unwrap_or_default();
 
         let (sender, receiver) = mpsc::channel();
         let steps = check_steps(&dir);
@@ -198,8 +225,9 @@ impl Model {
 
         let mut model = Self {
             dir,
-            config_path,
-            trust_config,
+            sisho_program,
+            board_config_path,
+            board_config,
             tools: Vec::new(),
             extensions,
             check_slots,
@@ -215,6 +243,7 @@ impl Model {
             focused_pane: FocusedPane::default(),
             preview_source: PreviewSource::default(),
             confirm_fix: false,
+            pending_trust: None,
             message: Some("Running checks...".to_string()),
             is_checking: false,
             is_checking_links: false,
@@ -282,8 +311,8 @@ impl Model {
         let sender = self.sender.clone();
 
         std::thread::spawn(move || {
-            let info = query_info(&path);
-            let board_pane = query_board_pane(&path, &dir);
+            let info = query_info(&word, &path);
+            let board_pane = query_board_pane(&word, &path, &dir);
             let _ = sender.send(WorkerMessage::ExtensionQueried {
                 word,
                 info,
@@ -292,45 +321,68 @@ impl Model {
         });
     }
 
-    /// Toggle trust state (`Untrusted` -> `Allowed` -> `Denied` -> `Allowed`)
-    /// for the currently selected extension in `Tools & Extensions`, persist to
-    /// `board.json`, and trigger or revoke extension data accordingly.
-    pub fn toggle_selected_extension_trust(&mut self) {
-        let Some(ext) = self.extensions.get_mut(self.selected_extension) else {
+    /// Open the trust confirmation prompt for the currently selected extension
+    /// in `Tools & Extensions`, without executing or changing trust yet.
+    pub fn request_trust_prompt(&mut self) {
+        let Some(ext) = self.extensions.get(self.selected_extension) else {
             return;
         };
-        let new_trust = ext.trust.toggle();
-        let word = ext.word.clone();
-        let is_active = ext.is_active;
-        ext.trust = new_trust;
+        self.confirm_fix = false;
+        self.pending_trust = Some(PendingTrustPrompt {
+            word: ext.word.clone(),
+            canonical_path: ext.canonical_path.clone(),
+            current_trust: ext.trust,
+        });
+    }
 
-        if new_trust != TrustState::Allowed {
-            ext.info = None;
-            ext.board_pane = None;
-            ext.is_querying = false;
-        }
+    /// Apply a confirmed trust decision (`Allowed`, `Denied`, or `Untrusted`)
+    /// by delegating to `sisho --allow|--deny|--untrust <canonical_path>`.
+    pub fn apply_pending_trust(&mut self, new_state: TrustState) {
+        let Some(prompt) = self.pending_trust.take() else {
+            return;
+        };
 
-        self.trust_config.set_trust(&word, new_trust);
-        if let Some(path) = &self.config_path
-            && let Err(err) = self.trust_config.save_to(path)
+        if let Err(err) = set_extension_trust(&self.sisho_program, &prompt.canonical_path, new_state)
         {
-            self.message = Some(format!("Failed to save board.json: {err}"));
+            self.message = Some(format!(
+                "Failed to update trust for sisho-{}: {err}",
+                prompt.word
+            ));
             return;
         }
 
-        match new_trust {
-            TrustState::Allowed => {
-                if is_active {
-                    let idx = self.selected_extension;
-                    self.spawn_extension_query(idx);
-                    self.message = Some(format!(
-                        "Allowed sisho-{word} (saved to board.json). Querying extension..."
-                    ));
+        let mut query_indices = Vec::new();
+        for (idx, ext) in self.extensions.iter_mut().enumerate() {
+            if ext.canonical_path == prompt.canonical_path {
+                ext.trust = new_state;
+                if new_state == TrustState::Allowed {
+                    if ext.is_active {
+                        query_indices.push(idx);
+                    }
                 } else {
-                    self.message = Some(format!("Allowed sisho-{word} (saved to board.json)."));
+                    ext.info = None;
+                    ext.board_pane = None;
+                    ext.is_querying = false;
                 }
             }
-            TrustState::Denied => {
+        }
+
+        match new_state {
+            TrustState::Allowed => {
+                let any_queried = !query_indices.is_empty();
+                for idx in query_indices {
+                    self.spawn_extension_query(idx);
+                }
+                if any_queried {
+                    self.message = Some(format!(
+                        "Allowed sisho-{} via sisho. Querying extension...",
+                        prompt.word
+                    ));
+                } else {
+                    self.message = Some(format!("Allowed sisho-{} via sisho.", prompt.word));
+                }
+            }
+            TrustState::Denied | TrustState::Untrusted => {
                 let total_items = self.extension_pane_items().len();
                 if self.selected_ext_item >= total_items {
                     self.selected_ext_item = total_items.saturating_sub(1);
@@ -339,9 +391,13 @@ impl Model {
                 {
                     self.preview_source = PreviewSource::CheckStep;
                 }
-                self.message = Some(format!("Denied sisho-{word} (saved to board.json)."));
+                let action = match new_state {
+                    TrustState::Denied => "Denied",
+                    TrustState::Untrusted => "Reset to untrusted:",
+                    TrustState::Allowed => unreachable!(),
+                };
+                self.message = Some(format!("{action} sisho-{} via sisho.", prompt.word));
             }
-            TrustState::Untrusted => {}
         }
     }
 
@@ -520,18 +576,22 @@ impl Model {
             .unwrap_or(&[])
     }
 
-    /// True if at least one allowed extension currently has a [`BoardPane`].
+    /// True if at least one allowed (and non-hidden) extension currently has a [`BoardPane`].
     pub fn has_extension_panes(&self) -> bool {
-        self.extensions
-            .iter()
-            .any(|e| e.trust == TrustState::Allowed && e.board_pane.is_some())
+        self.extensions.iter().any(|e| {
+            e.trust == TrustState::Allowed
+                && !self.board_config.is_pane_hidden(&e.word)
+                && e.board_pane.is_some()
+        })
     }
 
-    /// Return all allowed extensions that have emitted a [`BoardPane`].
+    /// Return all allowed (and non-hidden) extensions that have emitted a [`BoardPane`].
     pub fn active_extension_panes(&self) -> Vec<(&str, &BoardPane)> {
         self.extensions
             .iter()
-            .filter(|e| e.trust == TrustState::Allowed)
+            .filter(|e| {
+                e.trust == TrustState::Allowed && !self.board_config.is_pane_hidden(&e.word)
+            })
             .filter_map(|e| e.board_pane.as_ref().map(|pane| (e.word.as_str(), pane)))
             .collect()
     }

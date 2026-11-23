@@ -55,7 +55,9 @@ where
         .iter()
         .find(|e| e.word == "desk" && e.is_active && e.trust == TrustState::Allowed)
     {
-        return Step::new("desk", &desk.path).arg(file);
+        return Step::new("desk", &desk.path)
+            .envs(crate::extension::extension_dir_envs(&desk.word))
+            .arg(file);
     }
 
     // 5. System fallback (nano)
@@ -103,7 +105,9 @@ fn build_from_sisho_editor(
         .iter()
         .find(|e| e.word == word && e.is_active && e.trust == TrustState::Allowed)
     {
-        return Step::new(&ext.word, &ext.path).arg(file);
+        return Step::new(&ext.word, &ext.path)
+            .envs(crate::extension::extension_dir_envs(&ext.word))
+            .arg(file);
     }
 
     build_standard_editor(trimmed, file, line)

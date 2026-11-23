@@ -1,10 +1,11 @@
 //! The operating dashboard and board for the Tomet ecosystem (`sisho-board`).
 //!
 //! Two-tier design:
-//! - **Board**: Status of tools, extensions (with explicit user trust via `~/.config/sisho/board.json`),
+//! - **Board**: Status of tools, extensions (with explicit user trust via `sisho`),
 //!   extension board panes (`--sisho-board-pane`), integrity check outcomes, and broken links.
-//! - **Counter**: Action prompt bar to run check, fix, check-links, toggle extension trust, or open desk.
+//! - **Counter**: Action prompt bar to run check, fix, check-links, manage extension trust, or open desk.
 
+pub mod config;
 pub mod editor;
 pub mod extension;
 pub mod health;
@@ -26,14 +27,16 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 
+pub use config::BoardConfig;
 pub use editor::resolve_editor;
-pub use model::{ExtensionItem, FocusedPane, Model, PreviewSource};
+pub use model::{ExtensionItem, FocusedPane, Model, PendingTrustPrompt, PreviewSource};
 pub use screen::Screen;
-pub use trust::{TrustConfig, TrustState};
+pub use trust::TrustState;
 
 /// Run the interactive board TUI in `dir`.
 pub fn run(dir: PathBuf) -> anyhow::Result<()> {
-    let extensions = extension::scan();
+    let sisho_program = trust::default_sisho_program();
+    let extensions = extension::discover(&sisho_program);
     run_with_extensions(dir, extensions)
 }
 
@@ -55,6 +58,26 @@ pub fn run_with_extensions(dir: PathBuf, extensions: Vec<ExtensionItem>) -> anyh
                 && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'));
             if is_ctrl_c {
                 break;
+            }
+
+            if model.pending_trust.is_some() {
+                match key.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        model.apply_pending_trust(TrustState::Allowed);
+                    }
+                    KeyCode::Char('d') | KeyCode::Char('D') => {
+                        model.apply_pending_trust(TrustState::Denied);
+                    }
+                    KeyCode::Char('u') | KeyCode::Char('U') => {
+                        model.apply_pending_trust(TrustState::Untrusted);
+                    }
+                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                        model.pending_trust = None;
+                        model.message = Some("Trust change cancelled.".to_string());
+                    }
+                    _ => {}
+                }
+                continue;
             }
 
             if model.confirm_fix {
@@ -84,6 +107,7 @@ pub fn run_with_extensions(dir: PathBuf, extensions: Vec<ExtensionItem>) -> anyh
                     if model.is_fixing || model.is_checking {
                         model.message = Some("Operations already in progress.".to_string());
                     } else {
+                        model.pending_trust = None;
                         model.confirm_fix = true;
                     }
                 }
@@ -92,12 +116,12 @@ pub fn run_with_extensions(dir: PathBuf, extensions: Vec<ExtensionItem>) -> anyh
                 }
                 KeyCode::Char('a') => {
                     if model.focused_pane == FocusedPane::Extensions {
-                        model.toggle_selected_extension_trust();
+                        model.request_trust_prompt();
                     }
                 }
                 KeyCode::Enter | KeyCode::Char('e') => match model.focused_pane {
                     FocusedPane::Extensions if key.code == KeyCode::Enter => {
-                        model.toggle_selected_extension_trust();
+                        model.request_trust_prompt();
                     }
                     FocusedPane::BrokenLinks => {
                         if let Some(link) = model.selected_broken_link_item() {
@@ -126,6 +150,7 @@ pub fn run_with_extensions(dir: PathBuf, extensions: Vec<ExtensionItem>) -> anyh
                         .find(|e| e.word == "desk" && e.is_active);
                     match desk_ext {
                         Some(desk) if desk.trust == TrustState::Allowed => {
+                            let desk_word = desk.word.clone();
                             let desk_path = desk.path.clone();
                             let target_arg = if model.focused_pane == FocusedPane::BrokenLinks {
                                 if let Some(link) = model.selected_broken_link_item() {
@@ -136,8 +161,10 @@ pub fn run_with_extensions(dir: PathBuf, extensions: Vec<ExtensionItem>) -> anyh
                             } else {
                                 model.dir.clone()
                             };
+                            let desk_envs = extension::extension_dir_envs(&desk_word);
                             screen.execute_handover(|| {
                                 let _ = runner::Step::new("desk", &desk_path)
+                                    .envs(desk_envs)
                                     .arg(&target_arg)
                                     .run_inherited();
                             })?;

@@ -5,13 +5,14 @@ use ratatui::backend::TestBackend;
 use sisho_board_sdk::{BoardGauge, BoardItem, BoardPane, BoardStatus};
 use sisho_sdk::ExtensionInfo;
 
+use crate::config::BoardConfig;
 use crate::model::{
-    ExtensionItem, FocusedPane, Model, PreviewSource, StepSlot, ToolStatus,
+    ExtensionItem, FocusedPane, Model, PendingTrustPrompt, PreviewSource, StepSlot, ToolStatus,
 };
 use crate::model_tests::sample_health_report;
 use crate::runner::{Outcome, Status};
 use crate::tools::{Verdict, Version};
-use crate::trust::{TrustConfig, TrustState};
+use crate::trust::TrustState;
 use crate::ui;
 
 fn create_mock_model() -> Model {
@@ -53,8 +54,9 @@ fn create_mock_model() -> Model {
 
     Model {
         dir: PathBuf::from("."),
-        config_path: None,
-        trust_config: TrustConfig::new(),
+        sisho_program: PathBuf::from("sisho"),
+        board_config_path: None,
+        board_config: BoardConfig::new(),
         tools: vec![
             ToolStatus {
                 name: "tomet",
@@ -88,6 +90,7 @@ fn create_mock_model() -> Model {
         focused_pane: FocusedPane::default(),
         preview_source: PreviewSource::default(),
         confirm_fix: false,
+        pending_trust: None,
         message: None,
         is_checking: false,
         is_checking_links: false,
@@ -201,9 +204,36 @@ fn renders_extensions_pane_focus_and_toggle_action_hint() {
     let view = terminal.backend().to_string();
     assert!(view.contains("Pane:Extensions"), "{view}");
     assert!(view.contains("[a/Enter]"), "{view}");
-    assert!(view.contains("Toggle Trust"), "{view}");
+    assert!(view.contains("Change Trust"), "{view}");
     assert!(
         view.contains("> ? experimental [untrusted: a/Enter]"),
+        "{view}"
+    );
+}
+
+#[test]
+fn renders_pending_trust_confirmation_prompt() {
+    let backend = TestBackend::new(110, 32);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut model = create_mock_model();
+    model.focused_pane = FocusedPane::Extensions;
+    model.selected_extension = 1;
+    model.pending_trust = Some(PendingTrustPrompt {
+        word: "experimental".to_string(),
+        canonical_path: PathBuf::from("/real/bin/sisho-experimental"),
+        current_trust: TrustState::Untrusted,
+    });
+
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+
+    let view = terminal.backend().to_string();
+    assert!(
+        view.contains("Trust for 'sisho-experimental' (/real/bin/sisho-experimental):"),
+        "{view}"
+    );
+    assert!(
+        view.contains("[y] Allow (execute)   [d] Deny (block)   [u] Untrusted   [n/Esc] Cancel"),
         "{view}"
     );
 }

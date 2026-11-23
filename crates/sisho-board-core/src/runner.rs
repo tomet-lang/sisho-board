@@ -33,6 +33,7 @@ pub struct Step {
     name: String,
     program: OsString,
     args: Vec<OsString>,
+    envs: Vec<(OsString, OsString)>,
     current_dir: Option<PathBuf>,
 }
 
@@ -43,6 +44,7 @@ impl Step {
             name: name.into(),
             program: program.into(),
             args: Vec::new(),
+            envs: Vec::new(),
             current_dir: None,
         }
     }
@@ -60,6 +62,25 @@ impl Step {
         S: Into<OsString>,
     {
         self.args.extend(args.into_iter().map(Into::into));
+        self
+    }
+
+    /// Set an environment variable for the child process.
+    pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.envs.push((key.into(), value.into()));
+        self
+    }
+
+    /// Set several environment variables for the child process.
+    pub fn envs<I, K, V>(mut self, envs: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<OsString>,
+        V: Into<OsString>,
+    {
+        for (key, value) in envs {
+            self.envs.push((key.into(), value.into()));
+        }
         self
     }
 
@@ -133,6 +154,9 @@ impl Step {
     fn command(&self) -> Command {
         let mut command = Command::new(&self.program);
         command.args(&self.args);
+        for (key, value) in &self.envs {
+            command.env(key, value);
+        }
         if let Some(dir) = &self.current_dir {
             command.current_dir(dir);
         }
@@ -277,11 +301,35 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run_with_timeout_env(
+        program,
+        args,
+        std::iter::empty::<(&OsStr, &OsStr)>(),
+        timeout,
+    )
+}
+
+/// Run a program with arguments, additional environment variables, and a timeout,
+/// returning `Some(stdout)` if it exits 0 within `timeout`.
+pub fn run_with_timeout_env<I, S, E, K, V>(
+    program: &Path,
+    args: I,
+    envs: E,
+    timeout: Duration,
+) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+    E: IntoIterator<Item = (K, V)>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
     const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
     let mut command = Command::new(program);
     command
         .args(args)
+        .envs(envs)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
