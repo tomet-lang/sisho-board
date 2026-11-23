@@ -6,29 +6,41 @@ Status: decided 2026-10-20, extracted into standalone repository `sisho-board` w
 
 =[ Overview ]
 
-`sisho-board` provides a dedicated operating dashboard for a Tomet vault or repository: inspecting core tool versions, managing extension execution trust, viewing extension board panes, viewing broken links, and running checks or fixes on demand.
+`sisho-board` provides a dedicated operating dashboard for a Tomet vault or repository: inspecting core tool versions, measuring vault readiness and health (`%`), managing extension execution trust, viewing extension board panes, viewing broken links, and running checks or fixes on demand.
 
-It runs standalone as `sisho-board [path]`, or through `sisho` as `sisho board [path]`.
+It runs standalone as `sisho-board [path]`, or through `sisho` as `sisho board [path]`. For non-interactive inspection or CI reporting, `sisho-board --report [path]` (`-r`) prints a formatted readiness report and `sisho-board --json [path]` prints the structured `HealthReport` JSON.
 
 =[ Two-tier Design: Board & Counter ]
 
 1. **Board (Information Display)**:
-   - **Tools & Extensions**: Displays versions and compatibility status of core tools (`tomet`, `twrit`, `catasto`), along with installed `sisho-<word>` extensions discovered on `PATH` and their trust status (`Untrusted`, `Allowed`, `Denied`).
-   - **Integrity & Checks**: Displays status, exit code, and duration of each step in `check`, with an output preview pane showing stdout/stderr of the selected step.
-   - **Extension Board Panes**: Displays custom panes (`BoardPane`) emitted by allowed extensions via `sisho-<word> --sisho-board-pane <path>`, including a percentage `BoardGauge` bar and selectable `BoardItem` rows whose details appear in the preview pane.
-   - **Broken Links**: Displays summary and entries of broken links found by `tomet check-links --json`.
+   - **Tools & Extensions (Built-in Standard Card)**: Displays versions and compatibility status of core tools (`tomet`, `twrit`, `catasto`), along with installed `sisho-<word>` extensions discovered on `PATH` and their trust status (`Untrusted`, `Allowed`, `Denied`).
+   - **Integrity & Checks (Built-in Standard Card)**: Displays status, exit code, and duration of each step in `check`, with an output preview pane showing stdout/stderr of the selected step.
+   - **Vault Readiness & Health (Built-in Standard Card)**: Displays an overall readiness percentage gauge bar (`[█████████░]  92% Overall Readiness`) and six selectable readiness pillars whose actionable file lists and diagnostics appear in the preview pane when selected:
+     1. **Tomet Coverage (`tomet_coverage`)**: `.tmt` source documents and generated `.md` artifacts (`CLAUDE.md`, `Generated from ` header, or `::export(path: ...)` targets) vs unmigrated hand-written `.md` files.
+     2. **`::id` Declaration (`id_coverage`)**: share of author-owned `.tmt` documents declaring `::id(...)`.
+     3. **`::kind` & Blueprint (`kind_coverage`)**: share of author-owned `.tmt` documents declaring `::kind(...)` or `::blueprint(...)`, enriched with `tomet stats --json` corpus breakdowns.
+     4. **Link Health (`link_health`)**: unbroken links vs total checked links from `tomet check-links --json`.
+     5. **Writ & Catasto Governance (`governance`)**: presence of `.writ.tmt`, guarded `@rule(...)` blocks, and `catasto.lock` consistency.
+     6. **Cleanliness & Freshness (`cleanliness`)**: absence of `@draft` markers and validation warnings/errors, plus documentation vs code modification freshness.
+   - **Extension Board Panes (External Extensions)**: Displays custom panes (`BoardPane`) emitted by allowed extensions via `sisho-<word> --sisho-board-pane <path>`, including a percentage `BoardGauge` bar and selectable `BoardItem` rows whose details appear in the preview pane.
+   - **Broken Links (Built-in Standard Card)**: Displays summary and entries of broken links found by `tomet check-links --json`.
 
 2. **Counter (Execution Selection)**:
    - The interactive prompt bar at the bottom for choosing and executing tasks:
-     - `Tab` / `BackTab`: Cycle focus between Board panes (`Integrity & Checks`, `Extension Panes` when present, `Tools & Extensions`, `Broken Links`, and `Step Output Preview`).
+     - `Tab` / `BackTab`: Cycle focus between Board panes (`Integrity & Checks`, `Vault Readiness & Health`, `Extension Panes` when present, `Tools & Extensions`, `Broken Links`, and `Step Output Preview`).
      - `↑` / `k`, `↓` / `j`: Navigate selection or scroll within the focused pane.
      - `a` / `Enter` (when focused on `Tools & Extensions`): Toggle trust state (`Untrusted` -> `Allowed` -> `Denied` -> `Allowed`) for the selected extension and persist immediately to `~/.config/sisho/board.json`.
      - `Enter` / `e` (when focused on `Broken Links`): Open the selected link's source file in an editor at the broken line, restoring the board and re-verifying links on return.
-     - `c`: Execute check steps and refresh allowed extension board panes.
-     - `f`: Execute fix steps. Always prompts for confirmation (`Apply fixes? [y/N]`) before any file write occurs.
+     - `c`: Execute check steps, re-evaluate Vault Readiness & Health, and refresh allowed extension board panes.
+     - `f`: Execute fix steps. Always prompts for confirmation (`Apply fixes? [y/N]`) before any file write occurs, and refreshes Vault Readiness & Health upon completion.
      - `l`: Re-run the link check (`tomet check-links --json`).
      - `d`: Launch extension `sisho-desk` (if installed, active, and `Allowed`) with terminal handover.
      - `q` / `Esc`: Exit the board.
+
+=[ Non-interactive CLI Modes (`--report` and `--json`) ]
+
+- `sisho-board --report [path]` (`-r`): Evaluates the six readiness pillars and link health for `path` (default `.`) without opening the TUI, prints a human-readable summary with the `%` gauge bar and actionable findings for any non-100% pillars, and exits 0.
+- `sisho-board --json [path]`: Evaluates the six readiness pillars and link health for `path` without opening the TUI, prints the `HealthReport` JSON object to standard output, and exits 0.
 
 =[ Extension Trust (`~/.config/sisho/board.json`) ]
 

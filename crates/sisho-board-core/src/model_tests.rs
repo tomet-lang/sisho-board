@@ -4,12 +4,68 @@ use std::time::Duration;
 
 use sisho_board_sdk::{BoardGauge, BoardItem, BoardPane, BoardStatus};
 
+use crate::health::{HealthReport, PillarMetric};
 use crate::links::{BrokenLink, Position, Report};
 use crate::model::{
     ExtensionItem, FocusedPane, Model, PreviewSource, StepSlot, WorkerMessage,
 };
 use crate::runner::{Outcome, Status};
 use crate::trust::{TrustConfig, TrustState};
+
+fn sample_pillar(key: &str, name: &str, percent: u8, detail: &str) -> PillarMetric {
+    PillarMetric {
+        key: key.to_string(),
+        name: name.to_string(),
+        passed: percent as usize,
+        total: 100,
+        percent,
+        status: crate::health::status_for_percent(percent),
+        value_summary: format!("{percent}%"),
+        detail: detail.to_string(),
+    }
+}
+
+pub fn sample_health_report() -> HealthReport {
+    HealthReport {
+        overall_percent: 92,
+        tomet_coverage: sample_pillar(
+            "tomet_coverage",
+            "Tomet Coverage",
+            100,
+            "All Markdown files are generated artifacts or migrated to Tomet (.tmt).",
+        ),
+        id_coverage: sample_pillar(
+            "id_coverage",
+            "::id Declaration",
+            80,
+            "Documents missing ::id(...):\n  - tmtroot/draft.tmt",
+        ),
+        kind_coverage: sample_pillar(
+            "kind_coverage",
+            "::kind & Blueprint",
+            90,
+            "Documents missing ::kind(...):\n  - tmtroot/draft.tmt",
+        ),
+        link_health: sample_pillar(
+            "link_health",
+            "Link Health",
+            100,
+            "No broken links found.",
+        ),
+        governance: sample_pillar(
+            "governance",
+            "Writ & Catasto Governance",
+            100,
+            "All 4 rules guarded.",
+        ),
+        cleanliness: sample_pillar(
+            "cleanliness",
+            "Cleanliness & Freshness",
+            80,
+            "Documents containing @draft (1):\n  - tmtroot/draft.tmt",
+        ),
+    }
+}
 
 fn create_test_model() -> Model {
     let (sender, receiver) = std::sync::mpsc::channel();
@@ -34,8 +90,10 @@ fn create_test_model() -> Model {
         ],
         check_outcomes: Vec::new(),
         links_report: None,
+        health_report: Some(sample_health_report()),
         selected_extension: 0,
         selected_step: 0,
+        selected_health_pillar: 0,
         selected_broken_link: 0,
         selected_ext_item: 0,
         preview_scroll: 0,
@@ -45,6 +103,7 @@ fn create_test_model() -> Model {
         message: None,
         is_checking: true,
         is_checking_links: false,
+        is_checking_health: false,
         is_fixing: false,
         tick: 0,
         sender,
@@ -87,7 +146,7 @@ fn individual_step_completion_updates_only_its_slot() {
 }
 
 #[test]
-fn pane_focus_cycling_and_delegated_navigation() {
+fn pane_focus_cycling_includes_health_and_updates_preview_source() {
     let mut model = create_test_model();
     model.links_report = Some(Report {
         files_scanned: 2,
@@ -107,10 +166,30 @@ fn pane_focus_cycling_and_delegated_navigation() {
         unreadable: Vec::new(),
     });
 
-    // Without extension panes: Checks -> Extensions -> BrokenLinks -> OutputPreview -> Checks
+    // Without extension panes: Checks -> Health -> Extensions -> BrokenLinks -> OutputPreview -> Checks
     assert_eq!(model.focused_pane, FocusedPane::Checks);
     model.move_selection_down();
     assert_eq!(model.selected_step, 1);
+
+    model.next_pane();
+    assert_eq!(model.focused_pane, FocusedPane::Health);
+    assert_eq!(model.preview_source, PreviewSource::HealthPillar);
+    assert_eq!(model.selected_health_pillar, 0);
+    assert!(
+        model
+            .selected_preview_text()
+            .unwrap()
+            .contains("All Markdown files are generated")
+    );
+
+    model.move_selection_down();
+    assert_eq!(model.selected_health_pillar, 1);
+    assert!(
+        model
+            .selected_preview_text()
+            .unwrap()
+            .contains("tmtroot/draft.tmt")
+    );
 
     model.next_pane();
     assert_eq!(model.focused_pane, FocusedPane::Extensions);
@@ -127,6 +206,7 @@ fn pane_focus_cycling_and_delegated_navigation() {
 
     model.next_pane();
     assert_eq!(model.focused_pane, FocusedPane::Checks);
+    assert_eq!(model.preview_source, PreviewSource::CheckStep);
 }
 
 #[test]

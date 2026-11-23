@@ -329,6 +329,8 @@ fn draw_right_column(f: &mut Frame, area: Rect, model: &Model) {
         model.check_slots.len()
     };
     let checks_height = (cmd_count as u16) + 2;
+    // 1 gauge line + 6 pillar rows + 2 border lines = 9 lines (or 3 lines while scanning).
+    let health_height: u16 = if model.health_report.is_some() { 9 } else { 3 };
 
     if model.has_extension_panes() {
         let ext_lines = count_extension_pane_lines(model) + 2;
@@ -336,23 +338,131 @@ fn draw_right_column(f: &mut Frame, area: Rect, model: &Model) {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Max(checks_height),
+                Constraint::Max(health_height),
                 Constraint::Max(ext_lines as u16),
                 Constraint::Min(4),
             ])
             .split(area);
 
         draw_checks(f, rows[0], model);
-        draw_extension_panes(f, rows[1], model);
-        draw_output_preview(f, rows[2], model);
+        draw_health(f, rows[1], model);
+        draw_extension_panes(f, rows[2], model);
+        draw_output_preview(f, rows[3], model);
     } else {
         let rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Max(checks_height), Constraint::Min(0)])
+            .constraints([
+                Constraint::Max(checks_height),
+                Constraint::Max(health_height),
+                Constraint::Min(4),
+            ])
             .split(area);
 
         draw_checks(f, rows[0], model);
-        draw_output_preview(f, rows[1], model);
+        draw_health(f, rows[1], model);
+        draw_output_preview(f, rows[2], model);
     }
+}
+
+fn draw_health(f: &mut Frame, area: Rect, model: &Model) {
+    let is_focused = model.focused_pane == FocusedPane::Health;
+    let mut items = Vec::new();
+
+    if let Some(report) = &model.health_report {
+        let bar = format_gauge_bar(report.overall_percent, 10);
+        let bar_color = match crate::health::status_for_percent(report.overall_percent) {
+            BoardStatus::Pass => Color::Green,
+            BoardStatus::Warn => Color::Yellow,
+            BoardStatus::Fail => Color::Red,
+            BoardStatus::Info => Color::Cyan,
+        };
+        items.push(ListItem::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                bar,
+                Style::default().fg(bar_color).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled("Overall Readiness", Style::default().fg(Color::White)),
+        ])));
+
+        for (idx, pillar) in report.pillars().into_iter().enumerate() {
+            let is_selected = is_focused && idx == model.selected_health_pillar;
+            let cursor = if is_selected { "> " } else { "  " };
+            let (status_icon, status_style) = match pillar.status {
+                BoardStatus::Pass => ("✓ ", Style::default().fg(Color::Green)),
+                BoardStatus::Warn => (
+                    "! ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                BoardStatus::Fail => (
+                    "✗ ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                BoardStatus::Info => ("• ", Style::default().fg(Color::Cyan)),
+            };
+
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(
+                    cursor,
+                    if is_selected {
+                        Style::default().fg(Color::Cyan)
+                    } else {
+                        Style::default()
+                    },
+                ),
+                Span::styled(status_icon, status_style),
+                Span::styled(
+                    &pillar.name,
+                    if is_selected {
+                        Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                    } else {
+                        Style::default()
+                    },
+                ),
+                Span::raw(": "),
+                Span::styled(&pillar.value_summary, Style::default().fg(Color::White)),
+            ])));
+        }
+    } else {
+        let spin = spinner(model.tick);
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(format!("  {spin} "), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                "Measuring vault readiness & health...",
+                Style::default().fg(Color::Yellow),
+            ),
+        ])));
+    }
+
+    let title = if model.is_checking_health && model.health_report.is_none() {
+        " Vault Readiness & Health (scanning...) "
+    } else {
+        " Vault Readiness & Health "
+    };
+
+    let border_style = if is_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default()
+    };
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title(title)
+            .title_style(if is_focused {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            }),
+    );
+    f.render_widget(list, area);
 }
 
 fn count_extension_pane_lines(model: &Model) -> usize {
@@ -617,6 +727,26 @@ fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model) {
     let mut total_lines = 0;
 
     let content = match model.preview_source {
+        PreviewSource::HealthPillar => {
+            if let Some(pillar) = model.selected_health_pillar_metric() {
+                let mut lines = Vec::new();
+                lines.push(Line::from(vec![
+                    Span::styled("Pillar: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{} — {}", pillar.name, pillar.value_summary),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                lines.push(Line::from(""));
+                for l in pillar.detail.lines() {
+                    lines.push(Line::from(l));
+                }
+                total_lines = lines.len();
+                lines
+            } else {
+                vec![Line::from("Scanning vault readiness and health...")]
+            }
+        }
         PreviewSource::ExtensionItem => {
             if let Some(ext_ref) = model.selected_extension_pane_item() {
                 let mut lines = Vec::new();
@@ -779,6 +909,7 @@ fn draw_counter(f: &mut Frame, area: Rect, model: &Model) {
     } else {
         let focus_desc = match model.focused_pane {
             FocusedPane::Checks => "Checks",
+            FocusedPane::Health => "Health",
             FocusedPane::Extensions => "Extensions",
             FocusedPane::BrokenLinks => "Links",
             FocusedPane::ExtensionPanes => "ExtPane",
@@ -815,7 +946,7 @@ fn draw_counter(f: &mut Frame, area: Rect, model: &Model) {
                 action_spans.push(Span::styled("[↑/k ↓/j]", Style::default().fg(Color::Cyan)));
                 action_spans.push(Span::raw(" Move   "));
             }
-            FocusedPane::Checks | FocusedPane::ExtensionPanes => {
+            FocusedPane::Checks | FocusedPane::Health | FocusedPane::ExtensionPanes => {
                 action_spans.push(Span::styled("[↑/k ↓/j]", Style::default().fg(Color::Cyan)));
                 action_spans.push(Span::raw(" Move   "));
                 action_spans.push(Span::styled("[d]", Style::default().fg(Color::Cyan)));

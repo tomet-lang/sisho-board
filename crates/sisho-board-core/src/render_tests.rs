@@ -8,6 +8,7 @@ use sisho_sdk::ExtensionInfo;
 use crate::model::{
     ExtensionItem, FocusedPane, Model, PreviewSource, StepSlot, ToolStatus,
 };
+use crate::model_tests::sample_health_report;
 use crate::runner::{Outcome, Status};
 use crate::tools::{Verdict, Version};
 use crate::trust::{TrustConfig, TrustState};
@@ -77,8 +78,10 @@ fn create_mock_model() -> Model {
         check_slots,
         check_outcomes: outcomes,
         links_report: None,
+        health_report: Some(sample_health_report()),
         selected_extension: 0,
         selected_step: 0,
+        selected_health_pillar: 0,
         selected_broken_link: 0,
         selected_ext_item: 0,
         preview_scroll: 0,
@@ -88,6 +91,7 @@ fn create_mock_model() -> Model {
         message: None,
         is_checking: false,
         is_checking_links: false,
+        is_checking_health: false,
         is_fixing: false,
         tick: 0,
         sender,
@@ -97,7 +101,7 @@ fn create_mock_model() -> Model {
 
 #[test]
 fn renders_normal_board_and_trust_badges() {
-    let backend = TestBackend::new(110, 32);
+    let backend = TestBackend::new(110, 36);
     let mut terminal = Terminal::new(backend).unwrap();
 
     let model = create_mock_model();
@@ -114,14 +118,39 @@ fn renders_normal_board_and_trust_badges() {
         "{view}"
     );
     assert!(view.contains("Integrity & Checks"), "{view}");
+    assert!(view.contains("Vault Readiness & Health"), "{view}");
+    assert!(view.contains("[█████████░]  92% Overall Readiness"), "{view}");
+    assert!(view.contains("✓ Tomet Coverage: 100%"), "{view}");
+    assert!(view.contains("! ::id Declaration: 80%"), "{view}");
     assert!(view.contains("tomet check"), "{view}");
     assert!(view.contains("Counter (Actions)"), "{view}");
     assert!(view.contains("Pane:Checks"), "{view}");
 }
 
 #[test]
+fn renders_focused_health_card_and_pillar_detail_in_preview() {
+    let backend = TestBackend::new(110, 36);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut model = create_mock_model();
+    model.focused_pane = FocusedPane::Health;
+    model.preview_source = PreviewSource::HealthPillar;
+    model.selected_health_pillar = 1; // ::id Declaration
+
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+
+    let view = terminal.backend().to_string();
+    assert!(view.contains("Vault Readiness & Health"), "{view}");
+    assert!(view.contains("> ! ::id Declaration: 80%"), "{view}");
+    assert!(view.contains("Pillar: ::id Declaration — 80%"), "{view}");
+    assert!(view.contains("Documents missing ::id(...):"), "{view}");
+    assert!(view.contains("- tmtroot/draft.tmt"), "{view}");
+    assert!(view.contains("Pane:Health"), "{view}");
+}
+
+#[test]
 fn renders_extension_board_pane_with_gauge_and_detail_preview() {
-    let backend = TestBackend::new(110, 34);
+    let backend = TestBackend::new(110, 40);
     let mut terminal = Terminal::new(backend).unwrap();
 
     let mut model = create_mock_model();

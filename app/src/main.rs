@@ -5,8 +5,8 @@ use clap::Parser;
 use sisho_sdk::{Capabilities, ExtensionInfo};
 
 /// The interactive operating dashboard and board for the Tomet ecosystem:
-/// inspect core tool versions, extension status and trust permissions,
-/// extension board panes, integrity checks, and broken links.
+/// inspect core tool versions, vault readiness & health, extension status and
+/// trust permissions, extension board panes, integrity checks, and broken links.
 #[derive(Parser)]
 #[command(
     name = "sisho-board",
@@ -17,6 +17,14 @@ struct Cli {
     /// Disclose extension metadata for sisho.
     #[arg(long = "sisho-extension-info", hide = true)]
     sisho_extension_info: bool,
+
+    /// Print the Vault Readiness & Health report to standard output and exit.
+    #[arg(short = 'r', long = "report")]
+    report: bool,
+
+    /// Print the Vault Readiness & Health report as pretty JSON and exit.
+    #[arg(long = "json")]
+    json: bool,
 
     /// Project or vault directory to inspect (defaults to ".").
     #[arg(default_value = ".")]
@@ -41,6 +49,26 @@ fn main() -> ExitCode {
     }
 
     let _ = init_jobserver();
+
+    if cli.report || cli.json {
+        let links_report = sisho_board_core::links::check(&cli.path).ok();
+        let health = sisho_board_core::health::analyze(&cli.path, links_report.as_ref());
+        if cli.json {
+            match serde_json::to_string_pretty(&health) {
+                Ok(json) => {
+                    println!("{json}");
+                    return ExitCode::SUCCESS;
+                }
+                Err(error) => {
+                    eprintln!("sisho-board: failed to serialize health report: {error}");
+                    return ExitCode::from(1);
+                }
+            }
+        } else {
+            print!("{}", health.render_text_report());
+            return ExitCode::SUCCESS;
+        }
+    }
 
     use std::io::IsTerminal;
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {

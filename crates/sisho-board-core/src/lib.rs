@@ -7,6 +7,7 @@
 
 pub mod editor;
 pub mod extension;
+pub mod health;
 pub mod links;
 pub mod model;
 pub mod runner;
@@ -76,6 +77,7 @@ pub fn run_with_extensions(dir: PathBuf, extensions: Vec<ExtensionItem>) -> anyh
                 }
                 KeyCode::Char('c') => {
                     model.run_checks();
+                    model.run_health();
                     model.query_allowed_extensions();
                 }
                 KeyCode::Char('f') => {
@@ -110,7 +112,9 @@ pub fn run_with_extensions(dir: PathBuf, extensions: Vec<ExtensionItem>) -> anyh
                             model.run_check_links();
                         }
                     }
-                    FocusedPane::Checks | FocusedPane::ExtensionPanes => {
+                    FocusedPane::Checks
+                    | FocusedPane::Health
+                    | FocusedPane::ExtensionPanes => {
                         model.focused_pane = FocusedPane::OutputPreview;
                     }
                     _ => {}
@@ -141,6 +145,7 @@ pub fn run_with_extensions(dir: PathBuf, extensions: Vec<ExtensionItem>) -> anyh
                             model.query_allowed_extensions();
                             model.run_checks();
                             model.run_check_links();
+                            model.run_health();
                         }
                         Some(_) => {
                             model.message = Some(

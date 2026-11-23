@@ -11,7 +11,7 @@ $macro.generated_by(self::path)
 
 =[ Sisho Board ]
 
-Interactive operating dashboard and board for the Tomet ecosystem: inspect core tool versions, extension status and trust permissions, extension board panes, integrity checks, and broken links.
+Interactive operating dashboard and board for the Tomet ecosystem: inspect core tool versions, vault readiness & health (`%`), extension status and trust permissions, extension board panes, integrity checks, and broken links.
 
 ==[ Overview ]
 
@@ -24,29 +24,46 @@ The full CLI and Board Pane specification is at @link(tmtroot/spec/cli/board.tmt
 ==[ Usage ]
 
 ```bash
-`` sisho-board [path]    # open board in path (defaults to ".")
-`` sisho board [path]    # run through sisho as an extension
+`` sisho-board [path]           # open interactive board in path (defaults to ".")
+`` sisho-board --report [path]  # print Vault Readiness & Health report and exit (-r)
+`` sisho-board --json [path]    # print Vault Readiness & Health report as JSON and exit
+`` sisho board [path]           # run through sisho as an extension
+`` sisho board --report [path]  # run non-interactive readiness report through sisho
 ```
 
 Exit codes:
-- (`0`) normal exit (e.g. quit with `q` or `--sisho-extension-info`).
-- (`1`) could not do what was asked (e.g. standard input is not a terminal, or error during operation).
+- (`0`) normal exit (e.g. quit with `q`, `--report`, `--json`, or `--sisho-extension-info`).
+- (`1`) could not do what was asked (e.g. standard input is not a terminal in interactive mode, or error during operation).
 - (`2`) usage error (invalid command-line arguments).
+
+==[ Built-in Standard Cards & Vault Readiness (`%`) ]
+
+`sisho-board` provides four built-in standard cards on the Board:
+1. **Tools & Extensions**: Core tool versions (`tomet`, `twrit`, `catasto`) and installed `sisho-<word>` extensions with interactive trust management.
+2. **Integrity & Checks**: Real-time progress and outcomes of `tomet check`, `tomet format --check`, `tomet export --check`, `twrit check`, and `catasto check`.
+3. **Vault Readiness & Health (`%`)**: Built-in six-pillar readiness card with an overall percentage gauge bar (`[█████████░]  92% Overall Readiness`) and per-pillar diagnostics in `Step Output Preview`:
+   - **Tomet Coverage**: `.tmt` source documents and generated `.md` artifacts vs unmigrated hand-written `.md` files.
+   - **`::id` Declaration**: share of author-owned `.tmt` documents declaring `::id(...)`.
+   - **`::kind` & Blueprint**: share of author-owned `.tmt` documents declaring `::kind(...)` or `::blueprint(...)`, enriched with `tomet stats --json` corpus breakdowns.
+   - **Link Health**: unbroken links vs total checked links from `tomet check-links --json`.
+   - **Writ & Catasto Governance**: presence of `.writ.tmt`, guarded `@rule(...)` blocks, and `catasto.lock` consistency.
+   - **Cleanliness & Freshness**: absence of `@draft` markers and validation warnings/errors, plus documentation vs code freshness.
+4. **Broken Links**: Interactive list of broken links found by `tomet check-links --json`, with one-key editor jump (`Enter` / `e`).
 
 ==[ Extension Trust & Board Pane Protocol ]
 
-`sisho-board` discovers `sisho-<word>` extensions on `PATH` without executing them. By default, every discovered extension is `Untrusted`, and `sisho-board` never executes an untrusted or denied extension binary.
+In addition to the built-in standard cards, `sisho-board` discovers `sisho-<word>` extensions on `PATH` without executing them. By default, every discovered extension is `Untrusted`, and `sisho-board` never executes an untrusted or denied extension binary.
 
 1. **Interactive Trust Management (`~/.config/sisho/board.json`)**:
    - Focus the `Tools & Extensions` pane (`Tab`) and press `a` or `Enter` on an extension to toggle its permission between `Allowed` and `Denied` (persisted in `$XDG_CONFIG_HOME/sisho/board.json` or `~/.config/sisho/board.json`).
-2. **Board Pane Protocol (`sisho-board-sdk`)**:
+2. **External Extension Board Panes (`sisho-board-sdk`)**:
    - Once an extension is marked `Allowed`, `sisho-board` queries `sisho-<word> --sisho-extension-info` and `sisho-<word> --sisho-board-pane <path>`.
-   - If the extension prints a `BoardPane` JSON object (defined in `sisho-board-sdk`), `sisho-board` renders its title, optional percentage `BoardGauge` bar, and selectable `BoardItem` entries with detailed previews.
+   - If the extension prints a `BoardPane` JSON object (defined in `sisho-board-sdk`), `sisho-board` renders its custom pane alongside the built-in standard cards.
 
 ==[ Workspace Layout ]
 
 -| @dir(app) (`sisho-board`) -- Main CLI binary (`sisho-board`). Layer 2.
--| @dir(crates/sisho-board-core) (`sisho-board-core`) -- Core library holding the board state machine, trust persistence (`board.json`), runner, and Ratatui terminal UI. Layer 1.
+-| @dir(crates/sisho-board-core) (`sisho-board-core`) -- Core library holding the board state machine, built-in `Vault Readiness & Health` engine, trust persistence (`board.json`), runner, and Ratatui terminal UI. Layer 1.
 -| @dir(crates/sisho-board-sdk) (`sisho-board-sdk`) -- Protocol types and helpers for `--sisho-board-pane` (`BoardPane`, `BoardGauge`, `BoardItem`, `BoardStatus`). Layer 0.
 
 ==[ Building and Testing ]

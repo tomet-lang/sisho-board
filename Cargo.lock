@@ -612,6 +612,7 @@ dependencies = [
  "anyhow",
  "clap",
  "jobserver",
+ "serde_json",
  "sisho-board-core",
  "sisho-sdk",
 ]

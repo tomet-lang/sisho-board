@@ -7,6 +7,7 @@ use sisho_board_sdk::{BoardItem, BoardPane};
 use sisho_sdk::ExtensionInfo;
 
 use crate::extension::{query_board_pane, query_info};
+use crate::health::{self, HealthReport, PillarMetric};
 use crate::links::{self, BrokenLink, Report};
 use crate::runner::{Outcome, run_parallel_streaming};
 use crate::tools::{Tool, Verdict, check_steps, fix_steps};
@@ -90,6 +91,7 @@ impl StepSlot {
 pub enum FocusedPane {
     #[default]
     Checks,
+    Health,
     Extensions,
     BrokenLinks,
     ExtensionPanes,
@@ -101,6 +103,7 @@ pub enum FocusedPane {
 pub enum PreviewSource {
     #[default]
     CheckStep,
+    HealthPillar,
     ExtensionItem,
 }
 
@@ -112,6 +115,7 @@ pub enum WorkerMessage {
     },
     ChecksDone(Vec<Outcome>),
     LinksDone(Result<Report, String>),
+    HealthDone(HealthReport),
     FixStepDone {
         index: usize,
         outcome: Outcome,
@@ -142,8 +146,10 @@ pub struct Model {
     pub check_slots: Vec<StepSlot>,
     pub check_outcomes: Vec<Outcome>,
     pub links_report: Option<Report>,
+    pub health_report: Option<HealthReport>,
     pub selected_extension: usize,
     pub selected_step: usize,
+    pub selected_health_pillar: usize,
     pub selected_broken_link: usize,
     pub selected_ext_item: usize,
     pub preview_scroll: usize,
@@ -153,6 +159,7 @@ pub struct Model {
     pub message: Option<String>,
     pub is_checking: bool,
     pub is_checking_links: bool,
+    pub is_checking_health: bool,
     pub is_fixing: bool,
     pub tick: usize,
     pub sender: Sender<WorkerMessage>,
@@ -198,8 +205,10 @@ impl Model {
             check_slots,
             check_outcomes: Vec::new(),
             links_report: None,
+            health_report: None,
             selected_extension: 0,
             selected_step: 0,
+            selected_health_pillar: 0,
             selected_broken_link: 0,
             selected_ext_item: 0,
             preview_scroll: 0,
@@ -209,6 +218,7 @@ impl Model {
             message: Some("Running checks...".to_string()),
             is_checking: false,
             is_checking_links: false,
+            is_checking_health: false,
             is_fixing: false,
             tick: 0,
             sender,
@@ -217,6 +227,7 @@ impl Model {
         model.refresh_tools();
         model.query_allowed_extensions();
         model.run_check_links();
+        model.run_health();
         model.run_checks();
         model
     }
@@ -412,6 +423,21 @@ impl Model {
         });
     }
 
+    /// Run the built-in Readiness & Health analyzer in a background thread.
+    pub fn run_health(&mut self) {
+        if self.is_checking_health {
+            return;
+        }
+        self.is_checking_health = true;
+        let dir = self.dir.clone();
+        let links_report = self.links_report.clone();
+        let sender = self.sender.clone();
+        std::thread::spawn(move || {
+            let report = health::analyze(&dir, links_report.as_ref());
+            let _ = sender.send(WorkerMessage::HealthDone(report));
+        });
+    }
+
     /// Poll any messages from background worker threads and update model state.
     pub fn poll_background(&mut self) {
         self.tick = self.tick.wrapping_add(1);
@@ -443,6 +469,7 @@ impl Model {
                     if self.selected_step >= self.check_slots.len() {
                         self.selected_step = 0;
                     }
+                    self.run_health();
                     self.message = Some("Fixes applied. Run check to verify.".to_string());
                 }
                 WorkerMessage::LinksDone(res) => {
@@ -453,11 +480,21 @@ impl Model {
                             if self.selected_broken_link >= self.broken_links().len() {
                                 self.selected_broken_link = 0;
                             }
+                            if let Some(health) = &mut self.health_report {
+                                health.update_link_health(self.links_report.as_ref());
+                            }
                         }
                         Err(err) => {
                             self.message = Some(format!("check-links error: {err}"));
                         }
                     }
+                }
+                WorkerMessage::HealthDone(mut report) => {
+                    self.is_checking_health = false;
+                    if self.links_report.is_some() {
+                        report.update_link_health(self.links_report.as_ref());
+                    }
+                    self.health_report = Some(report);
                 }
                 WorkerMessage::ExtensionQueried {
                     word,
@@ -516,10 +553,44 @@ impl Model {
         items.get(self.selected_ext_item).cloned()
     }
 
+    /// Currently selected pillar in [`FocusedPane::Health`].
+    pub fn selected_health_pillar_metric(&self) -> Option<&PillarMetric> {
+        self.health_report
+            .as_ref()
+            .and_then(|r| r.pillars().get(self.selected_health_pillar).copied())
+    }
+
+    /// Return the preview text for the currently active [`PreviewSource`].
+    pub fn selected_preview_text(&self) -> Option<String> {
+        match self.preview_source {
+            PreviewSource::HealthPillar => {
+                if let Some(pillar) = self.selected_health_pillar_metric() {
+                    Some(pillar.detail.clone())
+                } else {
+                    Some("Scanning vault readiness and health...".to_string())
+                }
+            }
+            PreviewSource::ExtensionItem => self
+                .selected_extension_pane_item()
+                .and_then(|ext_ref| ext_ref.item.detail.clone().or_else(|| ext_ref.pane.summary.clone())),
+            PreviewSource::CheckStep => self.selected_outcome().map(|o| {
+                let mut text = o.stdout.clone();
+                if !o.stderr.is_empty() {
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    text.push_str(&o.stderr);
+                }
+                text
+            }),
+        }
+    }
+
     fn pane_order(&self) -> Vec<FocusedPane> {
         if self.has_extension_panes() {
             vec![
                 FocusedPane::Checks,
+                FocusedPane::Health,
                 FocusedPane::ExtensionPanes,
                 FocusedPane::Extensions,
                 FocusedPane::BrokenLinks,
@@ -528,6 +599,7 @@ impl Model {
         } else {
             vec![
                 FocusedPane::Checks,
+                FocusedPane::Health,
                 FocusedPane::Extensions,
                 FocusedPane::BrokenLinks,
                 FocusedPane::OutputPreview,
@@ -561,6 +633,10 @@ impl Model {
                 self.preview_source = PreviewSource::CheckStep;
                 self.preview_scroll = 0;
             }
+            FocusedPane::Health => {
+                self.preview_source = PreviewSource::HealthPillar;
+                self.preview_scroll = 0;
+            }
             FocusedPane::ExtensionPanes => {
                 self.preview_source = PreviewSource::ExtensionItem;
                 self.preview_scroll = 0;
@@ -572,6 +648,7 @@ impl Model {
     pub fn move_selection_up(&mut self) {
         match self.focused_pane {
             FocusedPane::Checks => self.move_check_selection_up(),
+            FocusedPane::Health => self.move_health_selection_up(),
             FocusedPane::Extensions => self.move_extension_selection_up(),
             FocusedPane::BrokenLinks => self.move_link_selection_up(),
             FocusedPane::ExtensionPanes => self.move_ext_item_selection_up(),
@@ -582,10 +659,27 @@ impl Model {
     pub fn move_selection_down(&mut self) {
         match self.focused_pane {
             FocusedPane::Checks => self.move_check_selection_down(),
+            FocusedPane::Health => self.move_health_selection_down(),
             FocusedPane::Extensions => self.move_extension_selection_down(),
             FocusedPane::BrokenLinks => self.move_link_selection_down(),
             FocusedPane::ExtensionPanes => self.move_ext_item_selection_down(),
             FocusedPane::OutputPreview => self.scroll_preview_down(1),
+        }
+    }
+
+    pub fn move_health_selection_up(&mut self) {
+        if self.selected_health_pillar > 0 {
+            self.selected_health_pillar -= 1;
+            self.preview_scroll = 0;
+            self.preview_source = PreviewSource::HealthPillar;
+        }
+    }
+
+    pub fn move_health_selection_down(&mut self) {
+        if self.selected_health_pillar + 1 < 6 {
+            self.selected_health_pillar += 1;
+            self.preview_scroll = 0;
+            self.preview_source = PreviewSource::HealthPillar;
         }
     }
 
