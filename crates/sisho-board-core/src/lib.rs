@@ -1,12 +1,13 @@
 //! Core state machine, extension trust delegation, and UI configuration for `sisho-board`.
 
-pub mod config;
 pub mod editor;
 pub mod extension;
+pub mod layout_editor;
 pub mod model;
 pub mod tools;
 pub mod trust;
 
+pub use sisho_board_config as config;
 pub use sisho_board_health::{health, links};
 pub use sisho_board_run as runner;
 
@@ -27,7 +28,11 @@ pub(crate) fn unique_test_suffix() -> String {
     format!("{nanos}-{seq}")
 }
 
-pub use config::BoardConfig;
 pub use editor::resolve_editor;
+pub use layout_editor::{EditorColumn, EditorConfirm, LayoutEditorState};
 pub use model::{ExtensionItem, FocusedPane, Model, PendingTrustPrompt, PreviewSource};
+pub use sisho_board_config::{
+    BoardConfig, BoardView, CURRENT_BOARD_CONFIG_SCHEMA_VERSION, PaneId, PaneSlot,
+    resolve_config_path, resolve_config_path_with,
+};
 pub use trust::TrustState;

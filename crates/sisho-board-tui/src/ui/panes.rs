@@ -1,62 +1,21 @@
-//! Ratatui rendering for `sisho-board` using the shared `sisho-tui` shell.
+//! Rendering for built-in and extension board panes.
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{List, ListItem, Paragraph, Wrap},
 };
+use sisho_board_core::config::PaneId;
 use sisho_board_core::model::{FocusedPane, Model, PreviewSource, StepSlot};
 use sisho_board_core::tools::Verdict;
 use sisho_board_core::trust::TrustState;
-use sisho_board_run::{Outcome, Status};
-use sisho_board_sdk::BoardStatus;
-use sisho_tui::{FooterBar, HeaderBar, KeyHint, ModalFrame, ShellLayout, StatusLine, Theme};
+use sisho_board_run::Status;
+use sisho_board_sdk::{BoardGauge, BoardItem, BoardPane, BoardStatus};
+use sisho_tui::Theme;
 
-/// Render the complete `sisho-board` interface inside the shared `sisho-tui` shell.
-pub fn draw(f: &mut Frame, model: &Model) {
-    let theme = Theme::sisho();
-    let shell = ShellLayout::split(f.area());
-
-    HeaderBar::new("sisho-board")
-        .context("Project Status")
-        .render(f, shell.header, &theme);
-
-    draw_board(f, shell.body, model, &theme);
-    if model.is_launcher_open {
-        draw_launcher_modal(f, shell.body, model, &theme);
-    }
-    draw_footer(f, shell.footer, model, &theme);
-}
-
-fn draw_board(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-        .split(area);
-
-    draw_left_column(f, columns[0], model, theme);
-    draw_right_column(f, columns[1], model, theme);
-}
-
-fn draw_left_column(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-        .split(area);
-
-    draw_tools_and_extensions(f, rows[0], model, theme);
-    draw_broken_links(f, rows[1], model, theme);
-}
-
-fn cursor_style(is_selected: bool, theme: &Theme) -> Style {
-    if is_selected {
-        Style::default().fg(theme.primary)
-    } else {
-        Style::default()
-    }
-}
+use super::{board_pane_block, cursor_style, spinner};
 
 fn board_status_icon(status: BoardStatus, theme: &Theme) -> (&'static str, Style) {
     match status {
@@ -77,7 +36,7 @@ fn board_status_icon(status: BoardStatus, theme: &Theme) -> (&'static str, Style
     }
 }
 
-fn draw_tools_and_extensions(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
+pub(super) fn draw_tools_and_extensions(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let is_focused = model.focused_pane == FocusedPane::Extensions;
     let mut items = Vec::new();
 
@@ -198,17 +157,16 @@ fn draw_tools_and_extensions(f: &mut Frame, area: Rect, model: &Model, theme: &T
         }
     }
 
-    let list = List::new(items).block(theme.pane_block(" Tools & Extensions ", is_focused));
+    let list = List::new(items).block(board_pane_block(
+        " Tools & Extensions ",
+        is_focused,
+        model.pane_active,
+        theme,
+    ));
     f.render_widget(list, area);
 }
 
-const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-fn spinner(tick: usize) -> &'static str {
-    SPINNER[tick % SPINNER.len()]
-}
-
-fn draw_broken_links(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
+pub(super) fn draw_broken_links(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let is_focused = model.focused_pane == FocusedPane::BrokenLinks;
     let broken = model.broken_links();
     let mut items = Vec::new();
@@ -288,53 +246,11 @@ fn draw_broken_links(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
         format!(" Broken Links ({}) ", broken.len())
     };
 
-    let list = List::new(items).block(theme.pane_block(title, is_focused));
+    let list = List::new(items).block(board_pane_block(title, is_focused, model.pane_active, theme));
     f.render_widget(list, area);
 }
 
-fn draw_right_column(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
-    let cmd_count = if model.check_slots.is_empty() {
-        sisho_board_core::tools::check_steps(&model.dir).len()
-    } else {
-        model.check_slots.len()
-    };
-    let checks_height = (cmd_count as u16) + 2;
-    // 1 gauge line + 6 pillar rows + 2 border lines = 9 lines (or 3 lines while scanning).
-    let health_height: u16 = if model.health_report.is_some() { 9 } else { 3 };
-
-    if model.has_extension_panes() {
-        let ext_lines = count_extension_pane_lines(model) + 2;
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Max(checks_height),
-                Constraint::Max(health_height),
-                Constraint::Max(ext_lines as u16),
-                Constraint::Min(4),
-            ])
-            .split(area);
-
-        draw_checks(f, rows[0], model, theme);
-        draw_health(f, rows[1], model, theme);
-        draw_extension_panes(f, rows[2], model, theme);
-        draw_output_preview(f, rows[3], model, theme);
-    } else {
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Max(checks_height),
-                Constraint::Max(health_height),
-                Constraint::Min(4),
-            ])
-            .split(area);
-
-        draw_checks(f, rows[0], model, theme);
-        draw_health(f, rows[1], model, theme);
-        draw_output_preview(f, rows[2], model, theme);
-    }
-}
-
-fn draw_health(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
+pub(super) fn draw_health(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let is_focused = model.focused_pane == FocusedPane::Health;
     let mut items = Vec::new();
 
@@ -393,23 +309,8 @@ fn draw_health(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
         " Vault Readiness & Health "
     };
 
-    let list = List::new(items).block(theme.pane_block(title, is_focused));
+    let list = List::new(items).block(board_pane_block(title, is_focused, model.pane_active, theme));
     f.render_widget(list, area);
-}
-
-fn count_extension_pane_lines(model: &Model) -> usize {
-    let panes = model.active_extension_panes();
-    let mut lines = 0;
-    for (_, pane) in &panes {
-        if panes.len() > 1 {
-            lines += 1;
-        }
-        if pane.gauge.is_some() {
-            lines += 1;
-        }
-        lines += pane.items.len();
-    }
-    lines.max(1)
 }
 
 fn format_gauge_bar(percent: u8, width: usize) -> String {
@@ -424,63 +325,82 @@ fn format_gauge_bar(percent: u8, width: usize) -> String {
     )
 }
 
-fn draw_extension_panes(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
+fn push_board_gauge<'a>(items: &mut Vec<ListItem<'a>>, gauge: &'a BoardGauge, theme: &Theme) {
+    let bar = format_gauge_bar(gauge.percent, 10);
+    let bar_color = if gauge.percent >= 80 {
+        theme.success
+    } else if gauge.percent >= 50 {
+        theme.warning
+    } else {
+        theme.error
+    };
+    items.push(ListItem::new(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            bar,
+            Style::default().fg(bar_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(&gauge.label, Style::default().fg(Color::White)),
+    ])));
+}
+
+fn push_board_item<'a>(
+    items: &mut Vec<ListItem<'a>>,
+    item: &'a BoardItem,
+    is_selected: bool,
+    theme: &Theme,
+) {
+    let cursor = if is_selected { "> " } else { "  " };
+    let (status_icon, status_style) = board_status_icon(item.status, theme);
+
+    items.push(ListItem::new(Line::from(vec![
+        Span::styled(cursor, cursor_style(is_selected, theme)),
+        Span::styled(status_icon, status_style),
+        Span::styled(
+            &item.label,
+            if is_selected {
+                Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            } else {
+                Style::default()
+            },
+        ),
+        Span::raw(": "),
+        Span::styled(&item.value, Style::default().fg(Color::White)),
+    ])));
+}
+
+pub(super) fn draw_extension_panes(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let is_focused = model.focused_pane == FocusedPane::ExtensionPanes;
     let panes = model.active_extension_panes();
     let mut items = Vec::new();
     let mut flat_idx = 0usize;
 
-    for (word, pane) in &panes {
-        if panes.len() > 1 {
-            items.push(ListItem::new(Line::from(vec![Span::styled(
-                format!("{} (sisho-{word}):", pane.title),
-                Style::default()
-                    .fg(theme.warning)
-                    .add_modifier(Modifier::BOLD),
-            )])));
-        }
+    if panes.is_empty() {
+        items.push(ListItem::new(Span::styled(
+            "No active extension panes.",
+            Style::default().fg(theme.muted),
+        )));
+    } else {
+        for (word, pane) in &panes {
+            if panes.len() > 1 {
+                items.push(ListItem::new(Line::from(vec![Span::styled(
+                    format!("{} (sisho-{word}):", pane.title),
+                    Style::default()
+                        .fg(theme.warning)
+                        .add_modifier(Modifier::BOLD),
+                )])));
+            }
 
-        if let Some(gauge) = &pane.gauge {
-            let bar = format_gauge_bar(gauge.percent, 10);
-            let bar_color = if gauge.percent >= 80 {
-                theme.success
-            } else if gauge.percent >= 50 {
-                theme.warning
-            } else {
-                theme.error
-            };
-            items.push(ListItem::new(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(
-                    bar,
-                    Style::default().fg(bar_color).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" "),
-                Span::styled(&gauge.label, Style::default().fg(Color::White)),
-            ])));
-        }
+            if let Some(gauge) = &pane.gauge {
+                push_board_gauge(&mut items, gauge, theme);
+            }
 
-        for item in &pane.items {
-            let is_selected = is_focused && flat_idx == model.selected_ext_item;
-            let cursor = if is_selected { "> " } else { "  " };
-            let (status_icon, status_style) = board_status_icon(item.status, theme);
-
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(cursor, cursor_style(is_selected, theme)),
-                Span::styled(status_icon, status_style),
-                Span::styled(
-                    &item.label,
-                    if is_selected {
-                        Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-                    } else {
-                        Style::default()
-                    },
-                ),
-                Span::raw(": "),
-                Span::styled(&item.value, Style::default().fg(Color::White)),
-            ])));
-
-            flat_idx += 1;
+            for item in &pane.items {
+                let is_selected = is_focused && flat_idx == model.selected_ext_item;
+                push_board_item(&mut items, item, is_selected, theme);
+                flat_idx += 1;
+            }
         }
     }
 
@@ -490,11 +410,109 @@ fn draw_extension_panes(f: &mut Frame, area: Rect, model: &Model, theme: &Theme)
         " Extension Panes ".to_string()
     };
 
-    let list = List::new(items).block(theme.pane_block(title, is_focused));
+    let list = List::new(items).block(board_pane_block(title, is_focused, model.pane_active, theme));
     f.render_widget(list, area);
 }
 
-fn draw_checks(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
+pub(super) fn draw_standalone_extension_pane(
+    f: &mut Frame,
+    area: Rect,
+    word: &str,
+    model: &Model,
+    theme: &Theme,
+) {
+    let is_focused = matches!(&model.focused_pane, PaneId::Extension(w) if w == word);
+    let ext = model.extensions.iter().find(|e| e.word == word);
+
+    let (title, items) = match ext {
+        None => (
+            format!(" Ext: {word} "),
+            vec![ListItem::new(Span::styled(
+                format!("Extension 'sisho-{word}' not found on PATH."),
+                Style::default().fg(theme.muted),
+            ))],
+        ),
+        Some(ext) if !ext.is_active => {
+            let note = ext
+                .note
+                .as_deref()
+                .unwrap_or("Extension is inactive or shadowed.");
+            (
+                format!(" Ext: {word} "),
+                vec![ListItem::new(Span::styled(
+                    note,
+                    Style::default().fg(theme.muted),
+                ))],
+            )
+        }
+        Some(ext) if ext.trust == TrustState::Untrusted => (
+            format!(" Ext: {word} [untrusted] "),
+            vec![ListItem::new(Span::styled(
+                format!(
+                    "sisho-{word} is untrusted. Focus Tools & Extensions and press [a/Enter] to allow."
+                ),
+                Style::default().fg(theme.warning),
+            ))],
+        ),
+        Some(ext) if ext.trust == TrustState::Denied => (
+            format!(" Ext: {word} [denied] "),
+            vec![ListItem::new(Span::styled(
+                format!(
+                    "sisho-{word} is denied. Focus Tools & Extensions and press [a/Enter] to change trust."
+                ),
+                Style::default().fg(theme.error),
+            ))],
+        ),
+        Some(ext) if ext.is_querying && ext.board_pane.is_none() => (
+            format!(" Ext: {word} (querying...) "),
+            vec![ListItem::new(Span::styled(
+                format!("Querying sisho-{word} --sisho-board-pane..."),
+                Style::default().fg(theme.muted),
+            ))],
+        ),
+        Some(ext) => {
+            if let Some(pane) = &ext.board_pane {
+                let mut rows = Vec::new();
+                if let Some(gauge) = &pane.gauge {
+                    push_board_gauge(&mut rows, gauge, theme);
+                }
+                if let Some(summary) = &pane.summary {
+                    for line in summary.lines() {
+                        rows.push(ListItem::new(Span::styled(
+                            format!("  {line}"),
+                            Style::default().fg(theme.muted),
+                        )));
+                    }
+                }
+                let selected_idx = model.selected_standalone_ext_item_index(word);
+                for (idx, item) in pane.items.iter().enumerate() {
+                    let is_selected = is_focused && idx == selected_idx;
+                    push_board_item(&mut rows, item, is_selected, theme);
+                }
+                if rows.is_empty() {
+                    rows.push(ListItem::new(Span::styled(
+                        "(no items reported)",
+                        Style::default().fg(theme.muted),
+                    )));
+                }
+                (format!(" {} (sisho-{word}) ", pane.title), rows)
+            } else {
+                (
+                    format!(" Ext: {word} "),
+                    vec![ListItem::new(Span::styled(
+                        format!("sisho-{word} does not expose a board pane."),
+                        Style::default().fg(theme.muted),
+                    ))],
+                )
+            }
+        }
+    };
+
+    let list = List::new(items).block(board_pane_block(title, is_focused, model.pane_active, theme));
+    f.render_widget(list, area);
+}
+
+pub(super) fn draw_checks(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let is_focused = model.focused_pane == FocusedPane::Checks;
     let mut items = Vec::new();
 
@@ -587,15 +605,15 @@ fn draw_checks(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
         " Integrity & Checks "
     };
 
-    let list = List::new(items).block(theme.pane_block(title, is_focused));
+    let list = List::new(items).block(board_pane_block(title, is_focused, model.pane_active, theme));
     f.render_widget(list, area);
 }
 
-fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
+pub(super) fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let is_focused = model.focused_pane == FocusedPane::OutputPreview;
     let mut total_lines = 0;
 
-    let content = match model.preview_source {
+    let content = match &model.preview_source {
         PreviewSource::HealthPillar => {
             if let Some(pillar) = model.selected_health_pillar_metric() {
                 let mut lines = Vec::new();
@@ -618,40 +636,26 @@ fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) 
         }
         PreviewSource::ExtensionItem => {
             if let Some(ext_ref) = model.selected_extension_pane_item() {
-                let mut lines = Vec::new();
-                lines.push(Line::from(vec![
-                    Span::styled("Extension: ", Style::default().fg(theme.muted)),
-                    Span::raw(format!("sisho-{} — {}", ext_ref.word, ext_ref.pane.title)),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::styled("Item: ", Style::default().fg(theme.muted)),
-                    Span::styled(
-                        format!("{}: {}", ext_ref.item.label, ext_ref.item.value),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
-                ]));
-
-                if let Some(detail) = &ext_ref.item.detail {
-                    lines.push(Line::from(""));
-                    for l in detail.lines() {
-                        lines.push(Line::from(l));
-                    }
-                } else if let Some(summary) = &ext_ref.pane.summary {
-                    lines.push(Line::from(""));
-                    for l in summary.lines() {
-                        lines.push(Line::from(l));
-                    }
-                } else {
-                    lines.push(Line::from(""));
-                    lines.push(Line::from(Span::styled(
-                        "(no additional detail for this item)",
-                        Style::default().fg(theme.muted),
-                    )));
-                }
+                let lines = build_extension_preview_lines(
+                    ext_ref.word,
+                    ext_ref.pane,
+                    Some(ext_ref.item),
+                    theme,
+                );
                 total_lines = lines.len();
                 lines
             } else {
                 vec![Line::from("No extension item selected.")]
+            }
+        }
+        PreviewSource::StandaloneExtensionItem(word) => {
+            if let Some(pane) = model.standalone_extension_pane(word) {
+                let item = model.selected_standalone_ext_item(word);
+                let lines = build_extension_preview_lines(word, pane, item, theme);
+                total_lines = lines.len();
+                lines
+            } else {
+                vec![Line::from(format!("No board pane data for sisho-{word}."))]
             }
         }
         PreviewSource::CheckStep => {
@@ -719,287 +723,61 @@ fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) 
 
     let paragraph = Paragraph::new(content)
         .scroll((scroll_y as u16, 0))
-        .block(theme.pane_block(title, is_focused))
+        .block(board_pane_block(title, is_focused, model.pane_active, theme))
         .wrap(Wrap { trim: true });
 
     f.render_widget(paragraph, area);
 }
 
-fn draw_launcher_modal(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
-    let inner = ModalFrame::new(" TUI Extensions ", 76, 72).render(f, area, theme);
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
+fn build_extension_preview_lines<'a>(
+    word: &str,
+    pane: &'a BoardPane,
+    item: Option<&'a BoardItem>,
+    theme: &Theme,
+) -> Vec<Line<'a>> {
+    let mut lines = vec![Line::from(vec![
+        Span::styled("Extension: ", Style::default().fg(theme.muted)),
+        Span::raw(format!("sisho-{word} — {}", pane.title)),
+    ])];
 
-    let target_arg = model.launch_target_arg();
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled("Target: ", Style::default().fg(theme.muted)),
+    if let Some(item) = item {
+        lines.push(Line::from(vec![
+            Span::styled("Item: ", Style::default().fg(theme.muted)),
             Span::styled(
-                target_arg.display().to_string(),
-                Style::default().fg(theme.secondary),
+                format!("{}: {}", item.label, item.value),
+                Style::default().add_modifier(Modifier::BOLD),
             ),
-        ]),
-        Line::from(""),
-    ];
+        ]));
 
-    let items = model.launcher_items();
-    let mut selected_range: Option<(usize, usize)> = None;
-
-    if items.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "No launchable TUI extensions found.",
-            Style::default().fg(theme.muted),
-        )));
+        if let Some(detail) = &item.detail {
+            lines.push(Line::from(""));
+            for l in detail.lines() {
+                lines.push(Line::from(l));
+            }
+        } else if let Some(summary) = &pane.summary {
+            lines.push(Line::from(""));
+            for l in summary.lines() {
+                lines.push(Line::from(l));
+            }
+        } else {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "(no additional detail for this item)",
+                Style::default().fg(theme.muted),
+            )));
+        }
+    } else if let Some(summary) = &pane.summary {
+        lines.push(Line::from(""));
+        for l in summary.lines() {
+            lines.push(Line::from(l));
+        }
+    } else {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Install a sisho-<word> extension with capabilities.tui = true, or inspect Tools & Extensions.",
+            "(no additional detail)",
             Style::default().fg(theme.muted),
         )));
-    } else {
-        for (idx, (_, ext)) in items.iter().enumerate() {
-            let start_line = lines.len();
-            let is_selected = idx == model.launcher_selected;
-            let cursor = if is_selected { "> " } else { "  " };
-
-            let (trust_icon, trust_style, trust_badge) = match ext.trust {
-                TrustState::Allowed => (
-                    "✓ ",
-                    Style::default().fg(theme.success),
-                    Span::styled(" [allowed]", Style::default().fg(theme.success)),
-                ),
-                TrustState::Untrusted => (
-                    "? ",
-                    Style::default().fg(theme.warning),
-                    Span::styled(" [untrusted]", Style::default().fg(theme.warning)),
-                ),
-                TrustState::Denied => (
-                    "✗ ",
-                    Style::default().fg(theme.error),
-                    Span::styled(" [denied]", Style::default().fg(theme.error)),
-                ),
-            };
-
-            let mut header_spans = vec![
-                Span::styled(cursor, cursor_style(is_selected, theme)),
-                Span::styled(trust_icon, trust_style),
-                Span::styled(
-                    &ext.word,
-                    if is_selected {
-                        Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-                    } else {
-                        Style::default().add_modifier(Modifier::BOLD)
-                    },
-                ),
-            ];
-
-            if let Some(info) = &ext.info {
-                header_spans.push(Span::styled(
-                    format!(" v{}", info.version),
-                    Style::default().fg(theme.secondary),
-                ));
-            }
-
-            header_spans.push(trust_badge);
-            lines.push(Line::from(header_spans));
-
-            if ext.is_querying {
-                lines.push(Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled("querying...", Style::default().fg(theme.muted)),
-                ]));
-            } else if let Some(info) = &ext.info
-                && !info.about.is_empty()
-            {
-                lines.push(Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled(&info.about, Style::default().fg(theme.inactive_tab_fg)),
-                ]));
-            } else if ext.trust == TrustState::Untrusted {
-                lines.push(Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled(
-                        "(allow via [a] or [Enter] to query metadata)",
-                        Style::default().fg(theme.muted),
-                    ),
-                ]));
-            }
-
-            lines.push(Line::from(vec![
-                Span::raw("    "),
-                Span::styled(
-                    ext.path.display().to_string(),
-                    Style::default().fg(theme.muted),
-                ),
-            ]));
-
-            let end_line = lines.len();
-            if is_selected {
-                selected_range = Some((start_line, end_line));
-            }
-        }
     }
 
-    let visible_height = inner.height as usize;
-    let scroll_y = match selected_range {
-        Some((start, end)) if end > visible_height => {
-            (end - visible_height).min(start)
-        }
-        _ => 0,
-    };
-
-    let paragraph = Paragraph::new(lines)
-        .scroll((scroll_y as u16, 0))
-        .wrap(Wrap { trim: false });
-    f.render_widget(paragraph, inner);
-}
-
-fn draw_footer(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
-    if let Some(prompt) = &model.pending_trust {
-        let hints = [
-            KeyHint::new("y", "Allow (execute)"),
-            KeyHint::new("d", "Deny (block)"),
-            KeyHint::new("u", "Untrusted"),
-            KeyHint::new("n/Esc", "Cancel"),
-        ];
-        let status = StatusLine::info(format!(
-            "Trust for 'sisho-{}' ({}):",
-            prompt.word,
-            prompt.canonical_path.display()
-        ));
-        FooterBar::new()
-            .hints(&hints)
-            .status(Some(status))
-            .render(f, area, theme);
-        return;
-    }
-
-    if model.confirm_fix {
-        let hints = [
-            KeyHint::new("y", "Yes, apply fixes"),
-            KeyHint::new("n/Esc", "Cancel"),
-        ];
-        let status = StatusLine::info("Apply fixes across the project? (writes files)");
-        FooterBar::new()
-            .hints(&hints)
-            .status(Some(status))
-            .render(f, area, theme);
-        return;
-    }
-
-    if model.is_launcher_open {
-        let launcher_count = model.launcher_items().len();
-        let hints = if launcher_count > 0 {
-            vec![
-                KeyHint::new("j/k", "Move"),
-                KeyHint::new("Enter", "Launch"),
-                KeyHint::new("a", "Change Trust"),
-                KeyHint::new("Esc/x", "Close"),
-            ]
-        } else {
-            vec![KeyHint::new("Esc/x", "Close")]
-        };
-        let status = StatusLine::info(format!(
-            "TUI Extension Launcher ({launcher_count} available)"
-        ));
-        FooterBar::new()
-            .hints(&hints)
-            .status(Some(status))
-            .summary(footer_summary(model))
-            .render(f, area, theme);
-        return;
-    }
-
-    let focus_desc = match model.focused_pane {
-        FocusedPane::Checks => "Pane:Checks",
-        FocusedPane::Health => "Pane:Health",
-        FocusedPane::Extensions => "Pane:Extensions",
-        FocusedPane::BrokenLinks => "Pane:Links",
-        FocusedPane::ExtensionPanes => "Pane:ExtPane",
-        FocusedPane::OutputPreview => "Pane:Preview",
-    };
-
-    let mut hints = vec![KeyHint::new("Tab", focus_desc)];
-
-    match model.focused_pane {
-        FocusedPane::Extensions => {
-            if !model.extensions.is_empty() {
-                hints.push(KeyHint::new("a/Enter", "Change Trust"));
-            }
-            hints.push(KeyHint::new("j/k", "Move"));
-        }
-        FocusedPane::BrokenLinks => {
-            if !model.broken_links().is_empty() {
-                hints.push(KeyHint::new("Enter/e", "Edit"));
-            }
-            hints.push(KeyHint::new("j/k", "Move"));
-        }
-        FocusedPane::Checks | FocusedPane::Health | FocusedPane::ExtensionPanes => {
-            hints.push(KeyHint::new("j/k", "Move"));
-        }
-        FocusedPane::OutputPreview => {
-            hints.push(KeyHint::new("j/k", "Scroll"));
-        }
-    }
-
-    hints.push(KeyHint::new("x", "Launch"));
-    hints.push(KeyHint::new("c", "Check"));
-    hints.push(KeyHint::new("f", "Fix"));
-    hints.push(KeyHint::new("l", "Links"));
-    hints.push(KeyHint::new("q", "Quit"));
-
-    let is_busy = model.is_checking || model.is_checking_links || model.is_fixing;
-    let status = model.message.as_deref().map(|msg| {
-        if is_busy {
-            StatusLine::info(format!("{} {msg}", spinner(model.tick)))
-        } else {
-            classify_status_message(msg, &model.check_outcomes)
-        }
-    });
-
-    FooterBar::new()
-        .hints(&hints)
-        .status(status)
-        .summary(footer_summary(model))
-        .render(f, area, theme);
-}
-
-fn classify_status_message<'a>(msg: &'a str, check_outcomes: &[Outcome]) -> StatusLine<'a> {
-    if msg.starts_with("Failed")
-        || msg.contains("error")
-        || msg.contains("not allowed")
-        || msg.contains("not installed")
-    {
-        StatusLine::error(msg)
-    } else if msg == "Checks completed." {
-        if check_outcomes
-            .iter()
-            .any(|outcome| !matches!(outcome.status, Status::Passed))
-        {
-            StatusLine::error(msg)
-        } else {
-            StatusLine::success(msg)
-        }
-    } else if msg.starts_with("Fixes applied") || msg.starts_with("Allowed ") {
-        StatusLine::success(msg)
-    } else {
-        StatusLine::info(msg)
-    }
-}
-
-fn footer_summary(model: &Model) -> String {
-    if model.is_checking || model.is_checking_links || model.is_fixing {
-        return format!("{} Running background tasks...", spinner(model.tick));
-    }
-
-    let readiness = model
-        .health_report
-        .as_ref()
-        .map(|report| format!("Readiness {}%", report.overall_percent))
-        .unwrap_or_else(|| "Readiness scanning...".to_string());
-    let broken = model.broken_links().len();
-    format!(
-        "{readiness} · {} extensions · {broken} broken links",
-        model.extensions.len()
-    )
+    lines
 }

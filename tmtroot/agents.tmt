@@ -46,7 +46,7 @@ All Markdown files (`README.md`, `AGENTS.md`, `CONTRIBUTING.md`) are generated b
 The rules that follow:
 -| `sisho-board` depends on no internal `sisho` crate (only `sisho-sdk` for `--sisho-extension-info` and `jobserver-gate`). It communicates with `tomet`, `twrit`, `catasto`, and allowed `sisho-<word>` extensions via process boundaries.
 -| `sisho-board` never executes any discovered `sisho-<word>` extension unless its trust state in `~/.local/share/sisho/trust.json` (queried via `sisho --list --json`) is `Allowed`.
--| The workspace enforces a 4-layer dependency hierarchy (see @link(.writ.tmt)): Layer 0 (`sisho-board-sdk`, `sisho-board-run`), Layer 1 (`sisho-board-core`, `sisho-board-health`), Layer 2 (`sisho-board-tui`), Layer 3 (`app`). Only `sisho-board-run` may use `std::process`, and only `sisho-board-tui` may use `ratatui` or `crossterm`.
+-| The workspace enforces a 4-layer dependency hierarchy (see @link(.writ.tmt)): Layer 0 (`sisho-board-config`, `sisho-board-sdk`, `sisho-board-run`), Layer 1 (`sisho-board-core`, `sisho-board-health`), Layer 2 (`sisho-board-tui`), Layer 3 (`app`). Only `sisho-board-run` may use `std::process`, and only `sisho-board-tui` may use `ratatui` or `crossterm`.
 
 Read `CONTRIBUTING.md` for the contribution workflow, commit conventions, and verification steps.
 

@@ -58,7 +58,7 @@ In addition to the built-in standard cards, `sisho-board` discovers `sisho-<word
    - Trust ownership belongs exclusively to `sisho` (`~/.local/share/sisho/trust.json`). `sisho-board` queries `sisho --list --json` to read extension trust states.
    - Focus the `Tools & Extensions` pane (`Tab`) and press `a` or `Enter` on an extension to open the confirmation prompt (`[y] Allow / [d] Deny / [u] Untrusted / [n/Esc] Cancel`), which delegates to `sisho --allow`, `sisho --deny`, or `sisho --untrust`.
 2. **Board UI Configuration (`~/.config/sisho/board/board.json`)**:
-   - Portable board UI preferences live at `$SISHO_CONFIG_DIR/board.json` or `$XDG_CONFIG_HOME/sisho/board/board.json` (fallback `$HOME/.config/sisho/board/board.json`), storing UI customization such as `hidden_extension_panes` with zero trust state or binary paths.
+   - Portable board UI preferences live at `$SISHO_CONFIG_DIR/board.json` or `$XDG_CONFIG_HOME/sisho/board/board.json` (fallback `$HOME/.config/sisho/board/board.json`), storing customizable `views`, `active_view`, and `hidden_extension_panes` (configurable interactively via `v`) with zero trust state or binary paths.
 3. **External Extension Board Panes (`sisho-board-sdk`)**:
    - Once an extension is marked `Allowed`, `sisho-board` queries `sisho-<word> --sisho-extension-info` and `sisho-<word> --sisho-board-pane <path>` (with per-extension `SISHO_CONFIG_DIR` and `SISHO_DATA_DIR`).
    - If the extension prints a `BoardPane` JSON object (defined in `sisho-board-sdk`), `sisho-board` renders its custom pane alongside the built-in standard cards.
@@ -69,6 +69,7 @@ In addition to the built-in standard cards, `sisho-board` discovers `sisho-<word
 -| @dir(crates/sisho-board-tui) (`sisho-board-tui`) -- Ratatui terminal UI, screen guard, and interactive event loop. Layer 2.
 -| @dir(crates/sisho-board-core) (`sisho-board-core`) -- Pure board state machine, `sisho` trust delegation, extension discovery, editor resolution, and portable UI config (`board.json`). Layer 1.
 -| @dir(crates/sisho-board-health) (`sisho-board-health`) -- Built-in `Vault Readiness & Health` (`%`) six-pillar analyzer and `tomet check-links` parser. Layer 1.
+-| @dir(crates/sisho-board-config) (`sisho-board-config`) -- Portable UI configuration (`board.json`), board view presets, and pane IDs. Layer 0.
 -| @dir(crates/sisho-board-run) (`sisho-board-run`) -- Jobserver-gated subprocess runner (`Step`, `Outcome`, `Status`). Layer 0.
 -| @dir(crates/sisho-board-sdk) (`sisho-board-sdk`) -- Protocol types and helpers for `--sisho-board-pane` (`BoardPane`, `BoardGauge`, `BoardItem`, `BoardStatus`). Layer 0.
 

@@ -8,6 +8,7 @@ description       = "Core board state machine, extension trust delegation, and U
 publish           = false
 
 [dependencies]
+sisho-board-config = { workspace = true }
 sisho-board-health = { workspace = true }
 sisho-board-run    = { workspace = true }
 sisho-board-sdk    = { workspace = true }

@@ -1,0 +1,85 @@
+::kind(api)
+
+::meta(crate: sisho-board-config, dependencies: (), dependents: (sisho-board-core))
+
+=[sisho-board-config]
+
+Layer 0: Portable UI board configuration (`$SISHO_CONFIG_DIR/board.json` or
+`$XDG_CONFIG_HOME/sisho/board/board.json`).
+
+`BoardConfig` stores only portable UI preferences (customizable board views,
+pane layouts, and hidden extension panes) with zero binary paths and zero
+trust state. Extension execution trust is owned exclusively by `sisho`
+(`~/.local/share/sisho/trust.json`).
+
+==[Structs]
+
+===[struct PaneSlot]
+
+A pane placement and relative vertical height weight within a column.
+
+===[struct BoardView]
+
+A named two-column layout preset in `board.json`.
+
+===[struct BoardConfig]
+
+Portable UI customization for `sisho-board` (`board.json`).
+
+==[Enums]
+
+===[enum PaneId]
+
+Identifier of a pane that can be placed in a \[`BoardView`\].
+
+==[Functions]
+
+===[fn resolve_config_path]
+
+Resolve the default path to `board.json`:
+
+- `$SISHO_CONFIG_DIR/board.json` if `SISHO_CONFIG_DIR` is set and non-empty
+- otherwise `$XDG_CONFIG_HOME/sisho/board/board.json`
+- otherwise `$HOME/.config/sisho/board/board.json`
+
+Matches `sisho_sdk::config_dir("board")`.
+
+===[fn resolve_config_path_with]
+
+Resolve the path to `board.json` using a custom environment variable lookup function.
+
+Matches `sisho_sdk::config_dir("board")`.
+
+==[Constants]
+
+===[const CURRENT_BOARD_CONFIG_SCHEMA_VERSION]
+
+Current schema version for `board.json`.
+
+===[const DEFAULT_LEFT_RATIO]
+
+Default left-column width percentage for a \[`BoardView`\].
+
+===[const MIN_LEFT_RATIO]
+
+Minimum allowed left-column width percentage.
+
+===[const MAX_LEFT_RATIO]
+
+Maximum allowed left-column width percentage.
+
+===[const DEFAULT_PANE_WEIGHT]
+
+Default vertical weight for a newly added \[`PaneSlot`\].
+
+===[const MIN_PANE_WEIGHT]
+
+Minimum allowed vertical weight for a \[`PaneSlot`\] when normalized.
+
+===[const MIN_EDITOR_PANE_WEIGHT]
+
+Minimum allowed vertical weight when adjusting in the layout editor.
+
+===[const MAX_PANE_WEIGHT]
+
+Maximum allowed vertical weight for a \[`PaneSlot`\].

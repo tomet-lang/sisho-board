@@ -22,20 +22,36 @@ It runs standalone as `sisho-board [path]`, or through `sisho` as `sisho board [
      4. **Link Health (`link_health`)**: unbroken links vs total checked links from `tomet check-links --json`.
      5. **Writ & Catasto Governance (`governance`)**: presence of `.writ.tmt`, guarded `@rule(...)` blocks, and `catasto.lock` consistency.
      6. **Cleanliness & Freshness (`cleanliness`)**: absence of `@draft` markers and validation warnings/errors, plus documentation vs code modification freshness.
-   - **Extension Board Panes (External Extensions)**: Displays custom panes (`BoardPane`) emitted by allowed extensions via `sisho-<word> --sisho-board-pane <path>`, including a percentage `BoardGauge` bar and selectable `BoardItem` rows whose details appear in the preview pane.
+   - **Extension Board Panes (External Extensions)**: Displays custom panes (`BoardPane`) emitted by allowed extensions via `sisho-<word> --sisho-board-pane <path>`, including a percentage `BoardGauge` bar and selectable `BoardItem` rows whose details appear in the preview pane. Extensions can appear either in the aggregate `Extension Panes` card (filtered by `hidden_extension_panes`) or as dedicated standalone panes (`PaneId::Extension(word)`) placed directly into a `BoardView`.
    - **Broken Links (Built-in Standard Card)**: Displays summary and entries of broken links found by `tomet check-links --json`.
 
 2. **Counter (Execution Selection)**:
-   - The interactive prompt bar at the bottom for choosing and executing tasks:
-     - `Tab` / `BackTab`: Cycle focus between Board panes (`Integrity & Checks`, `Vault Readiness & Health`, `Extension Panes` when present, `Tools & Extensions`, `Broken Links`, and `Step Output Preview`).
-     - `↑` / `k`, `↓` / `j`: Navigate selection or scroll within the focused pane.
-     - `a` / `Enter` (when focused on `Tools & Extensions`): Open the trust confirmation prompt (`[y] Allow / [d] Deny / [u] Untrusted / [n/Esc] Cancel`) for the selected extension. On confirmation, `sisho-board` delegates the update to `sisho --allow`, `sisho --deny`, or `sisho --untrust` using the extension's canonical path.
-     - `Enter` / `e` (when focused on `Broken Links`): Open the selected link's source file in an editor at the broken line, restoring the board and re-verifying links on return.
+   - Unified two-level navigation + view tabs:
+     - `Tab` / `BackTab` / `1`..`9` (or `[` / `]`): Switch between configured `BoardView` tabs displayed in the `HeaderBar` (also resets active-pane mode and snaps pane focus to a visible pane if needed).
+     - **Pane Selection Mode (`!pane_active`)**:
+       - `←` `↑` `↓` `→`: Move 2D spatial focus across panes in the active `BoardView` (`↑`/`↓` within the current column, `←`/`→` proportionally across columns).
+       - `Enter`: Activate/enter the selected pane (`[ACTIVE]`) to explore its items.
+       - `Esc` / `q`: Exit the board.
+     - **Active Pane Mode (`pane_active`)**:
+       - `↑` / `k`, `↓` / `j`: Navigate items or scroll within the active pane (`PageUp` / `PageDown` / `Home` scroll preview).
+       - `Esc`: Exit active pane mode back to 2D pane selection (`q` exits the board).
+       - `a` / `Enter` (when focused on `Tools & Extensions`): Open the trust confirmation prompt (`[y] Allow / [d] Deny / [u] Untrusted / [n/Esc] Cancel`) for the selected extension. On confirmation, `sisho-board` delegates the update to `sisho --allow`, `sisho --deny`, or `sisho --untrust` using the extension's canonical path.
+       - `Enter` / `e` (when focused on `Broken Links`): Open the selected link's source file in an editor at the broken line, restoring the board and re-verifying links on return.
+       - `Enter` / `e` (when focused on `Integrity & Checks`, `Vault Readiness & Health`, `Extension Panes`, or a standalone extension pane): Jump focus to `Output Preview` when present in the active view.
+     - **Global Board Actions** (available in both Pane Selection and Active Pane modes):
+       - `v`: Open the **Board Layout Editor** modal using a **Grab & Drop** model (with immediate persistence to `board.json`):
+       - Displays a top bar (`View X/Y`, visual `Left % | Right %` split bar, and `[MOVING]` / rename / confirmation prompts) above three columns (`Left Column`, `Right Column`, and `Available`).
+       - `↑` / `k`, `↓` / `j`, `←` / `h` / `BackTab`, `→` / `l` / `Tab`: Move the cursor across panes and columns when not grabbed.
+       - `Space` / `Enter`: Grab the selected pane (`» ... [MOVING]`) or drop it; when pressed in `Available`, adds the pane to `Left` and immediately grabs it for positioning.
+       - While grabbed: `↑`/`k` and `↓`/`j` move the pane up/down within its column; `←`/`h` moves from `Right` to `Left`; `→`/`l` moves from `Left` to `Right`, or from `Right` hides to `Available` and drops it; `Esc` releases the grab without closing the modal.
+       - `Delete` / `Backspace` (in `Left`/`Right` when not grabbed): Remove/hide the selected pane to `Available`.
+       - `+` / `=` and `-` / `_`: Adjust the selected pane's vertical weight (`5..=100`, step `5`); `<` / `>`: adjust `left_ratio` (`20..=80`, step `5`).
+       - `[` / `]`: Switch views; `n`: add a new view; `R`: rename active view inline (`Enter` save, `Esc` cancel); `D`: delete active view (with confirmation; blocked if only 1 view remains); `r`: reset views to default (with confirmation); `u`: undo up to 20 edits; `Esc` (when not grabbed) / `v`: close the editor.
      - `c`: Execute check steps, re-evaluate Vault Readiness & Health, and refresh allowed extension board panes.
      - `f`: Execute fix steps. Always prompts for confirmation (`Apply fixes? [y/N]`) before any file write occurs, and refreshes Vault Readiness & Health upon completion.
      - `l`: Re-run the link check (`tomet check-links --json`).
-     - `x`: Open the global TUI extension launcher modal from any pane. Lists active extensions excluding `board` and `Denied`: `Allowed` extensions whose `--sisho-extension-info` declares `capabilities.tui = true`, plus `Untrusted` active extensions (so users can inspect or allow them without leaving the launcher). Each entry shows extension `word`, `about` (when queried), `trust`, and `path`. Inside the launcher: `↑` / `k`, `↓` / `j` navigate; `Enter` launches an `Allowed` TUI extension with terminal handover (passing the selected broken link's source path when `Broken Links` is focused and has a selection, otherwise the board root path) or opens the trust confirmation prompt if `Untrusted`; `a` opens the trust confirmation prompt; `Esc` / `x` closes the launcher.
-     - `q` / `Esc`: Exit the board.
+     - `x`: Open the global TUI extension launcher modal from any pane. Lists active extensions excluding `board` and `Denied`: `Allowed` extensions whose `--sisho-extension-info` declares `capabilities.tui = true`, plus `Untrusted` active extensions (so users can inspect or allow them without leaving the launcher). Each entry shows extension `word`, `about` (when queried), `trust`, and `path`. Inside the launcher: `↑` / `k`, `↓` / `j` navigate; `Enter` launches an `Allowed` TUI extension with terminal handover (`current_dir` set to the board directory and no positional arguments) or opens the trust confirmation prompt if `Untrusted`; `a` opens the trust confirmation prompt; `Esc` / `x` closes the launcher.
+     - `q`: Exit the board.
 
 =[ Non-interactive CLI Modes (`--report` and `--json`) ]
 
@@ -51,7 +67,12 @@ It runs standalone as `sisho-board [path]`, or through `sisho` as `sisho board [
 =[ Board UI Configuration (`~/.config/sisho/board/board.json`) ]
 
 - **Config Location**: `$SISHO_CONFIG_DIR/board.json` if `SISHO_CONFIG_DIR` is set and non-empty; otherwise `$XDG_CONFIG_HOME/sisho/board/board.json` if `XDG_CONFIG_HOME` is set and non-empty; otherwise `$HOME/.config/sisho/board/board.json` (matching `sisho_sdk::config_dir("board")`).
-- **Portable UI State**: `board.json` stores only portable UI preferences (such as `hidden_extension_panes`), with zero binary paths and zero trust state.
+- **Portable UI State (`schema_version: 2`)**: `board.json` stores only portable UI layout preferences, with zero binary paths and zero trust state:
+  - `schema_version`: Currently `2`.
+  - `views`: Ordered list of named `BoardView` presets (`name`, `left_ratio` clamped to `20..=80` defaulting to `45`, `left` and `right` lists of `PaneSlot { pane: PaneId, weight: u16 }` with `weight` normalized to `1..=100`). Defaults to a single `"Overview"` view (`left_ratio: 45`, `left: [Extensions (w:55), BrokenLinks (w:45)]`, `right: [Health (w:25), Checks (w:25), ExtensionPanes (w:20), OutputPreview (w:30)]`). If `views` is empty on load, it falls back to the default view; duplicate panes within a view are deduplicated.
+  - `active_view`: 0-based index of the active `BoardView`, clamped to `0..views.len()`.
+  - `hidden_extension_panes`: Extension words filtered out of the aggregate `ExtensionPanes` pane without affecting trust.
+- **Pane Identifiers (`PaneId`)**: Built-in variants (`checks`, `health`, `extensions`, `broken_links`, `extension_panes`, `output_preview`) and standalone extension panes (`extension("<word>")`) backed by an allowed extension's `--sisho-board-pane` output. When only one column in a `BoardView` contains panes, it expands to 100% width; when both columns are empty, the board displays a hint to press `v` to customize the layout.
 
 =[ Board Pane Protocol (`--sisho-board-pane`) ]
 
@@ -65,7 +86,7 @@ An extension that is marked `Allowed` is queried with `sisho-<word> --sisho-boar
 =[ Crate Architecture ]
 
 The `sisho-board` workspace is structured into four dependency layers enforced by `.writ.tmt`:
-- **Layer 0**: `sisho-board-sdk` (Board Pane JSON schema) and `sisho-board-run` (jobserver-gated `Step` subprocess runner, sole owner of `std::process` in `crates/*`).
+- **Layer 0**: `sisho-board-config` (portable `board.json` configuration, `BoardView`, and `PaneId` schema), `sisho-board-sdk` (Board Pane JSON schema), and `sisho-board-run` (jobserver-gated `Step` subprocess runner, sole owner of `std::process` in `crates/*`).
 - **Layer 1**: `sisho-board-health` (six-pillar `Vault Readiness & Health` engine and `tomet check-links` report parser) and `sisho-board-core` (state `Model`, `sisho` trust delegation, extension discovery, editor resolution, and `board.json` config).
 - **Layer 2**: `sisho-board-tui` (Ratatui rendering, terminal `Screen` guard, and interactive event loop; sole owner of `ratatui` and `crossterm` in `crates/*`).
 - **Layer 3**: `app` (`sisho-board` CLI binary).

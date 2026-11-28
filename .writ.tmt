@@ -17,7 +17,7 @@ does not relax the rule to fit the change it wanted to make.
     3: ("app")
     2: ("crates/sisho-board-tui")
     1: ("crates/sisho-board-core", "crates/sisho-board-health")
-    0: ("crates/sisho-board-run", "crates/sisho-board-sdk")
+    0: ("crates/sisho-board-config", "crates/sisho-board-run", "crates/sisho-board-sdk")
   )
 }
 
@@ -25,7 +25,8 @@ Every workspace member belongs to exactly one layer, and depends only on
 layers strictly below its own. Same-layer dependencies are allowed;
 upward ones are not.
 
-Layer 0 holds the Board Pane disclosure protocol SDK (`sisho-board-sdk`) and
+Layer 0 holds the Board Pane disclosure protocol SDK (`sisho-board-sdk`),
+the portable UI configuration schema (`sisho-board-config`), and
 the jobserver-gated subprocess runner (`sisho-board-run`).
 Layer 1 holds the pure state machine and trust delegation (`sisho-board-core`)
 and the Vault Readiness & Health / link-check engine (`sisho-board-health`).

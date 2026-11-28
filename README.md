@@ -55,7 +55,7 @@ In addition to the built-in standard cards, `sisho-board` discovers `sisho-<word
 
 2. **Board UI Configuration (`~/.config/sisho/board/board.json`)**:
 
-- Portable board UI preferences live at `$SISHO_CONFIG_DIR/board.json` or `$XDG_CONFIG_HOME/sisho/board/board.json` (fallback `$HOME/.config/sisho/board/board.json`), storing UI customization such as `hidden_extension_panes` with zero trust state or binary paths.
+- Portable board UI preferences live at `$SISHO_CONFIG_DIR/board.json` or `$XDG_CONFIG_HOME/sisho/board/board.json` (fallback `$HOME/.config/sisho/board/board.json`), storing customizable `views`, `active_view`, and `hidden_extension_panes` (configurable interactively via `v`) with zero trust state or binary paths.
 
 3. **External Extension Board Panes (`sisho-board-sdk`)**:
 
@@ -68,6 +68,7 @@ In addition to the built-in standard cards, `sisho-board` discovers `sisho-<word
 - `crates/sisho-board-tui` (`sisho-board-tui`) -- Ratatui terminal UI, screen guard, and interactive event loop. Layer 2.
 - `crates/sisho-board-core` (`sisho-board-core`) -- Pure board state machine, `sisho` trust delegation, extension discovery, editor resolution, and portable UI config (`board.json`). Layer 1.
 - `crates/sisho-board-health` (`sisho-board-health`) -- Built-in `Vault Readiness & Health` (`%`) six-pillar analyzer and `tomet check-links` parser. Layer 1.
+- `crates/sisho-board-config` (`sisho-board-config`) -- Portable UI configuration (`board.json`), board view presets, and pane IDs. Layer 0.
 - `crates/sisho-board-run` (`sisho-board-run`) -- Jobserver-gated subprocess runner (`Step`, `Outcome`, `Status`). Layer 0.
 - `crates/sisho-board-sdk` (`sisho-board-sdk`) -- Protocol types and helpers for `--sisho-board-pane` (`BoardPane`, `BoardGauge`, `BoardItem`, `BoardStatus`). Layer 0.
 

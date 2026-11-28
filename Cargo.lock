@@ -627,11 +627,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sisho-board-config"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "sisho-board-core"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sisho-board-config",
  "sisho-board-health",
  "sisho-board-run",
  "sisho-board-sdk",

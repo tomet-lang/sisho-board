@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
   "app",
+  "crates/sisho-board-config",
   "crates/sisho-board-core",
   "crates/sisho-board-health",
   "crates/sisho-board-run",
@@ -18,6 +19,7 @@ rust-version = "1.85"
 license      = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
+sisho-board-config = { path = "crates/sisho-board-config" }
 sisho-board-core   = { path = "crates/sisho-board-core" }
 sisho-board-health = { path = "crates/sisho-board-health" }
 sisho-board-run    = { path = "crates/sisho-board-run" }

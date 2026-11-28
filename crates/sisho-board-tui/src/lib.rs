@@ -14,9 +14,9 @@ mod render_tests;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use sisho_board_core::{
-    ExtensionItem, FocusedPane, Model, TrustState, extension, resolve_editor, trust,
+    EditorColumn, ExtensionItem, Model, PaneId, TrustState, extension, resolve_editor, trust,
 };
 
 pub use screen::Screen;
@@ -106,13 +106,12 @@ pub fn run_with_model(mut model: Model) -> anyhow::Result<()> {
                             if ext.is_tui_launchable() {
                                 let word = ext.word.clone();
                                 let path = ext.path.clone();
-                                let target_arg = model.launch_target_arg();
                                 let envs = extension::extension_dir_envs(&word);
                                 model.close_launcher();
                                 screen.execute_handover(|| {
                                     let _ = sisho_board_run::Step::new(&word, &path)
+                                        .current_dir(&model.dir)
                                         .envs(envs)
-                                        .arg(&target_arg)
                                         .run_inherited();
                                 })?;
                                 model.refresh_tools();
@@ -130,9 +129,30 @@ pub fn run_with_model(mut model: Model) -> anyhow::Result<()> {
                 continue;
             }
 
+            if model.layout_editor.is_open {
+                handle_layout_editor_key(&mut model, key);
+                continue;
+            }
+
             match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => {
+                KeyCode::Char('q') => {
                     break;
+                }
+                KeyCode::Tab => {
+                    model.next_view();
+                }
+                KeyCode::BackTab => {
+                    model.prev_view();
+                }
+                KeyCode::Char('[') => {
+                    model.prev_view();
+                }
+                KeyCode::Char(']') => {
+                    model.next_view();
+                }
+                KeyCode::Char(c @ '1'..='9') => {
+                    let idx = (c as usize) - ('1' as usize);
+                    model.select_view(idx);
                 }
                 KeyCode::Char('c') => {
                     model.run_checks();
@@ -150,63 +170,159 @@ pub fn run_with_model(mut model: Model) -> anyhow::Result<()> {
                 KeyCode::Char('l') => {
                     model.run_check_links();
                 }
-                KeyCode::Char('a') => {
-                    if model.focused_pane == FocusedPane::Extensions {
-                        model.request_trust_prompt();
-                    }
-                }
-                KeyCode::Enter | KeyCode::Char('e') => match model.focused_pane {
-                    FocusedPane::Extensions if key.code == KeyCode::Enter => {
-                        model.request_trust_prompt();
-                    }
-                    FocusedPane::BrokenLinks => {
-                        if let Some(link) = model.selected_broken_link_item() {
-                            let source_path = model.dir.join(&link.source);
-                            let line = link.at.map(|p| p.line);
-                            let column = link.at.map(|p| p.column);
-                            let step =
-                                resolve_editor(&source_path, line, column, &model.extensions);
-                            screen.execute_handover(|| {
-                                let _ = step.run_inherited();
-                            })?;
-                            model.run_check_links();
-                        }
-                    }
-                    FocusedPane::Checks
-                    | FocusedPane::Health
-                    | FocusedPane::ExtensionPanes => {
-                        model.focused_pane = FocusedPane::OutputPreview;
-                    }
-                    _ => {}
-                },
                 KeyCode::Char('x') => {
                     model.open_launcher();
                 }
-                KeyCode::Tab => {
-                    model.next_pane();
+                KeyCode::Char('v') => {
+                    model.open_layout_editor();
                 }
-                KeyCode::BackTab => {
-                    model.prev_pane();
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    model.move_selection_up();
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    model.move_selection_down();
-                }
-                KeyCode::PageUp => {
-                    model.scroll_preview_up(10);
-                }
-                KeyCode::PageDown => {
-                    model.scroll_preview_down(10);
-                }
-                KeyCode::Home => {
-                    model.preview_scroll = 0;
-                }
-                _ => {}
+                _ if !model.pane_active => match key.code {
+                    KeyCode::Esc => {
+                        break;
+                    }
+                    KeyCode::Up => {
+                        model.move_pane_up();
+                    }
+                    KeyCode::Down => {
+                        model.move_pane_down();
+                    }
+                    KeyCode::Left => {
+                        model.move_pane_left();
+                    }
+                    KeyCode::Right => {
+                        model.move_pane_right();
+                    }
+                    KeyCode::Enter => {
+                        model.enter_pane();
+                    }
+                    _ => {}
+                },
+                _ => match key.code {
+                    KeyCode::Esc => {
+                        model.exit_pane();
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        model.move_selection_up();
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        model.move_selection_down();
+                    }
+                    KeyCode::PageUp => {
+                        model.scroll_preview_up(10);
+                    }
+                    KeyCode::PageDown => {
+                        model.scroll_preview_down(10);
+                    }
+                    KeyCode::Home => {
+                        model.preview_scroll = 0;
+                    }
+                    KeyCode::Char('a') => {
+                        if model.focused_pane == PaneId::Extensions {
+                            model.request_trust_prompt();
+                        }
+                    }
+                    KeyCode::Enter | KeyCode::Char('e') => match &model.focused_pane {
+                        PaneId::Extensions if key.code == KeyCode::Enter => {
+                            model.request_trust_prompt();
+                        }
+                        PaneId::BrokenLinks => {
+                            if let Some(link) = model.selected_broken_link_item() {
+                                let source_path = model.dir.join(&link.source);
+                                let line = link.at.map(|p| p.line);
+                                let column = link.at.map(|p| p.column);
+                                let step =
+                                    resolve_editor(&source_path, line, column, &model.extensions);
+                                screen.execute_handover(|| {
+                                    let _ = step.run_inherited();
+                                })?;
+                                model.run_check_links();
+                            }
+                        }
+                        PaneId::Checks
+                        | PaneId::Health
+                        | PaneId::ExtensionPanes
+                        | PaneId::Extension(_) => {
+                            if model.active_view().contains(&PaneId::OutputPreview) {
+                                model.focused_pane = PaneId::OutputPreview;
+                            }
+                        }
+                        PaneId::Extensions | PaneId::OutputPreview => {}
+                    },
+                    _ => {}
+                },
             }
         }
     }
 
     Ok(())
+}
+
+fn handle_layout_editor_key(model: &mut Model, key: KeyEvent) {
+    if model.layout_editor.confirm_action.is_some() {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => model.confirm_editor_action(),
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                model.cancel_editor_action();
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    if model.layout_editor.rename_buffer.is_some() {
+        match key.code {
+            KeyCode::Enter => model.commit_rename_view(),
+            KeyCode::Esc => model.cancel_rename_view(),
+            KeyCode::Backspace => {
+                if let Some(buf) = &mut model.layout_editor.rename_buffer {
+                    buf.pop();
+                }
+            }
+            KeyCode::Char(c)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                if let Some(buf) = &mut model.layout_editor.rename_buffer {
+                    buf.push(c);
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    match key.code {
+        KeyCode::Esc => {
+            if model.layout_editor.grabbed {
+                model.cancel_grab();
+            } else {
+                model.close_layout_editor();
+            }
+        }
+        KeyCode::Char('v') => model.close_layout_editor(),
+        KeyCode::Up | KeyCode::Char('k') => model.move_cursor_up(),
+        KeyCode::Down | KeyCode::Char('j') => model.move_cursor_down(),
+        KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => model.move_column_left(),
+        KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => model.move_column_right(),
+        KeyCode::Char(' ') | KeyCode::Enter => model.toggle_grab(),
+        KeyCode::Delete | KeyCode::Backspace => {
+            if !model.layout_editor.grabbed && model.layout_editor.column != EditorColumn::Available
+            {
+                model.remove_selected_pane();
+            }
+        }
+        KeyCode::Char('+') | KeyCode::Char('=') => model.adjust_selected_pane_weight(5),
+        KeyCode::Char('-') | KeyCode::Char('_') => model.adjust_selected_pane_weight(-5),
+        KeyCode::Char('<') => model.adjust_left_ratio(-5),
+        KeyCode::Char('>') => model.adjust_left_ratio(5),
+        KeyCode::Char('[') => model.prev_view(),
+        KeyCode::Char(']') => model.next_view(),
+        KeyCode::Char('n') => model.add_view(),
+        KeyCode::Char('R') => model.start_rename_view(),
+        KeyCode::Char('D') => model.request_delete_view(),
+        KeyCode::Char('r') => model.request_reset_default(),
+        KeyCode::Char('u') => model.undo_layout_edit(),
+        _ => {}
+    }
 }

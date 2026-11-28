@@ -1,0 +1,12 @@
+[package]
+name                   = "sisho-board-config"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description       = "Portable UI board configuration (board.json) and view layout types for sisho-board."
+publish           = false
+
+[dependencies]
+serde      = { workspace = true }
+serde_json = { workspace = true }

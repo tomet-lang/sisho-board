@@ -1,48 +1,10 @@
 ::kind(api)
 
-::meta(crate: sisho-board-core, dependencies: (sisho-board-health, sisho-board-run, sisho-board-sdk), dependents: (sisho-board-tui))
+::meta(crate: sisho-board-core, dependencies: (sisho-board-config, sisho-board-health, sisho-board-run, sisho-board-sdk), dependents: (sisho-board-tui))
 
 =[sisho-board-core]
 
 Core state machine, extension trust delegation, and UI configuration for `sisho-board`.
-
-==[Module config]
-
-Portable UI board configuration (`$SISHO_CONFIG_DIR/board.json` or `$XDG_CONFIG_HOME/sisho/board/board.json`).
-
-`BoardConfig` stores only portable UI preferences (such as hidden extension panes)
-with zero binary paths and zero trust state. Extension execution trust is owned
-exclusively by `sisho` (`~/.local/share/sisho/trust.json`).
-
-===[Structs]
-
-====[struct BoardConfig]
-
-Portable UI customization for `sisho-board` (`board.json`).
-
-===[Functions]
-
-====[fn default_config_path]
-
-Resolve the default path to `board.json`:
-
-- `$SISHO_CONFIG_DIR/board.json` if `SISHO_CONFIG_DIR` is set and non-empty
-- otherwise `$XDG_CONFIG_HOME/sisho/board/board.json`
-- otherwise `$HOME/.config/sisho/board/board.json`
-
-Matches `sisho_sdk::config_dir("board")`.
-
-====[fn resolve_config_path_with]
-
-Resolve the path to `board.json` using a custom environment variable lookup function.
-
-Matches `sisho_sdk::config_dir("board")`.
-
-===[Constants]
-
-====[const CURRENT_BOARD_CONFIG_SCHEMA_VERSION]
-
-Current schema version for `board.json`.
 
 ==[Module editor]
 
@@ -116,6 +78,32 @@ Query an allowed extension executable for its `--sisho-extension-info` metadata.
 
 Query an allowed extension executable for its `--sisho-board-pane <dir>` data.
 
+==[Module layout_editor]
+
+State types for the interactive Board Layout Editor modal.
+
+===[Structs]
+
+====[struct LayoutEditorState]
+
+Interactive state for the Board Layout Editor modal.
+
+===[Enums]
+
+====[enum EditorColumn]
+
+Active column cursor inside the Layout Editor modal.
+
+====[enum EditorConfirm]
+
+Destructive or bulk action awaiting user confirmation in the Layout Editor.
+
+===[Constants]
+
+====[const MAX_LAYOUT_UNDO_HISTORY]
+
+Maximum number of snapshots kept in the layout editor undo history.
+
 ==[Module model]
 
 State model and background worker coordination for `sisho-board`.
@@ -148,10 +136,6 @@ The state of the board and counter.
 
 A slot representing a check or fix step in progress or completed.
 
-====[enum FocusedPane]
-
-The currently focused pane on the Board.
-
 ====[enum PreviewSource]
 
 Which pane provides the content currently shown in the Output Preview pane.
@@ -159,6 +143,12 @@ Which pane provides the content currently shown in the Output Preview pane.
 ====[enum WorkerMessage]
 
 Messages sent from background worker threads to the model.
+
+===[Type Aliases]
+
+====[type FocusedPane]
+
+Alias for \[`PaneId`\] representing the currently focused pane on the Board.
 
 ==[Module tools]
 

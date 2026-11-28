@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use sisho_board_core::config::BoardConfig;
+use sisho_board_core::LayoutEditorState;
+use sisho_board_core::config::{BoardConfig, BoardView, PaneId, PaneSlot};
 use sisho_board_core::model::{
     ExtensionItem, FocusedPane, Model, PendingTrustPrompt, PreviewSource, StepSlot, ToolStatus,
 };
@@ -136,13 +138,16 @@ fn create_mock_model() -> Model {
         selected_health_pillar: 0,
         selected_broken_link: 0,
         selected_ext_item: 0,
+        selected_standalone_ext_items: BTreeMap::new(),
         preview_scroll: 0,
         focused_pane: FocusedPane::default(),
+        pane_active: false,
         preview_source: PreviewSource::default(),
         confirm_fix: false,
         pending_trust: None,
         is_launcher_open: false,
         launcher_selected: 0,
+        layout_editor: LayoutEditorState::default(),
         message: None,
         is_checking: false,
         is_checking_links: false,
@@ -181,7 +186,9 @@ fn renders_normal_board_and_trust_badges() {
     assert!(view.contains("✓ Tomet Coverage: 100%"), "{view}");
     assert!(view.contains("! ::id Declaration: 80%"), "{view}");
     assert!(view.contains("tomet check"), "{view}");
-    assert!(view.contains("[Tab] Pane:Checks"), "{view}");
+    assert!(view.contains("[←↑↓→] Select Pane"), "{view}");
+    assert!(view.contains("[Enter] Explore"), "{view}");
+    assert!(view.contains("[Tab] View"), "{view}");
     assert!(view.contains("[x] Launch"), "{view}");
     assert!(!view.contains("[d] Desk"), "{view}");
     assert!(
@@ -208,7 +215,7 @@ fn renders_focused_health_card_and_pillar_detail_in_preview() {
     assert!(view.contains("Pillar: ::id Declaration — 80%"), "{view}");
     assert!(view.contains("Documents missing ::id(...):"), "{view}");
     assert!(view.contains("- tmtroot/draft.tmt"), "{view}");
-    assert!(view.contains("Pane:Health"), "{view}");
+    assert!(view.contains("[←↑↓→] Select Pane"), "{view}");
 }
 
 #[test]
@@ -242,7 +249,7 @@ fn renders_extension_board_pane_with_gauge_and_detail_preview() {
     assert!(view.contains("! Stale Drafts: 2 files"), "{view}");
     assert!(view.contains("Missing id in:"), "{view}");
     assert!(view.contains("- docs/draft1.tmt"), "{view}");
-    assert!(view.contains("Pane:ExtPane"), "{view}");
+    assert!(view.contains("[←↑↓→] Select Pane"), "{view}");
 }
 
 #[test]
@@ -252,12 +259,14 @@ fn renders_extensions_pane_focus_and_toggle_action_hint() {
 
     let mut model = create_mock_model();
     model.focused_pane = FocusedPane::Extensions;
+    model.pane_active = true;
     model.selected_extension = 1;
 
     terminal.draw(|f| ui::draw(f, &model)).unwrap();
 
     let view = terminal.backend().to_string();
-    assert!(view.contains("Pane:Extensions"), "{view}");
+    assert!(view.contains("Tools & Extensions [ACTIVE]"), "{view}");
+    assert!(view.contains("[Esc] Panes"), "{view}");
     assert!(view.contains("[a/Enter]"), "{view}");
     assert!(view.contains("Change Trust"), "{view}");
     assert!(
@@ -331,11 +340,12 @@ fn renders_broken_links_list() {
         unreadable: Vec::new(),
     });
     model.focused_pane = FocusedPane::BrokenLinks;
+    model.pane_active = true;
 
     terminal.draw(|f| ui::draw(f, &model)).unwrap();
 
     let view = terminal.backend().to_string();
-    assert!(view.contains("Broken Links (1/1)"), "{view}");
+    assert!(view.contains("Broken Links (1/1) [ACTIVE]"), "{view}");
     assert!(view.contains("docs/intro.tmt:15 -> missing.tmt"), "{view}");
     assert!(view.contains("[Enter/e]"), "{view}");
     assert!(view.contains("Edit"), "{view}");
@@ -393,7 +403,7 @@ fn renders_launcher_modal_with_tui_and_untrusted_extensions() {
 
     let view = terminal.backend().to_string();
     assert!(view.contains("TUI Extensions"), "{view}");
-    assert!(view.contains("Target: ."), "{view}");
+    assert!(view.contains("Directory: ."), "{view}");
     assert!(view.contains("> ✓ desk v0.2.0 [allowed]"), "{view}");
     assert!(view.contains("Interactive desk for Tomet"), "{view}");
     assert!(view.contains("/path/to/sisho-desk"), "{view}");
@@ -433,9 +443,291 @@ fn renders_launcher_modal_empty_state() {
 
     let view = terminal.backend().to_string();
     assert!(view.contains("TUI Extensions"), "{view}");
+    assert!(view.contains("No launchable TUI extensions found."), "{view}");
+    assert!(view.contains("[Esc/x] Close"), "{view}");
+}
+
+#[test]
+fn renders_header_view_tabs_and_switch_hint_when_multiple_views() {
+    let backend = TestBackend::new(120, 36);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut model = create_mock_model();
+    model.board_config.views.push(BoardView {
+        name: "Writing".to_string(),
+        left_ratio: 50,
+        left: vec![PaneSlot::new(PaneId::Health, 100)],
+        right: vec![PaneSlot::new(PaneId::OutputPreview, 100)],
+    });
+    model.select_view(1);
+
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+
+    let view = terminal.backend().to_string();
+    assert!(view.contains("[1] Overview"), "{view}");
+    assert!(view.contains("[2] Writing"), "{view}");
+    assert!(view.contains("[v] Layout"), "{view}");
+    assert!(view.contains("[Tab/1-9] View"), "{view}");
+    // Writing view only shows Health and OutputPreview, not Tools & Extensions or Broken Links.
+    assert!(view.contains("Vault Readiness & Health"), "{view}");
+    assert!(view.contains("Step Output Preview"), "{view}");
+    assert!(!view.contains("Tools & Extensions"), "{view}");
+    assert!(!view.contains("Broken Links"), "{view}");
+}
+
+#[test]
+fn renders_single_column_collapse_and_empty_view_message() {
+    let backend = TestBackend::new(100, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    // Only left column populated -> takes 100% width, right column omitted
+    let mut model = create_mock_model();
+    model.board_config.views = vec![BoardView {
+        name: "Checks Only".to_string(),
+        left_ratio: 30,
+        left: vec![PaneSlot::new(PaneId::Checks, 100)],
+        right: Vec::new(),
+    }];
+    model.ensure_focus_visible();
+
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+    let single_col = terminal.backend().to_string();
+    assert!(single_col.contains("Integrity & Checks"), "{single_col}");
+    assert!(!single_col.contains("Tools & Extensions"), "{single_col}");
+    // Full width border reaches column 99
+    let buf = terminal.backend().buffer().clone();
+    assert_eq!(buf[(99, 3)].symbol(), "┐");
+
+    // Empty view -> helpful prompt
+    model.board_config.views = vec![BoardView {
+        name: "Blank".to_string(),
+        left_ratio: 45,
+        left: Vec::new(),
+        right: Vec::new(),
+    }];
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+    let empty_view = terminal.backend().to_string();
     assert!(
-        view.contains("No launchable TUI extensions found."),
+        empty_view.contains("This view has no panes. Press [v] to customize layout."),
+        "{empty_view}"
+    );
+}
+
+#[test]
+fn renders_standalone_extension_pane_and_fallback_states() {
+    let backend = TestBackend::new(120, 32);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut model = create_mock_model();
+    let mut history = ExtensionItem::new("history", PathBuf::from("/bin/sisho-history"), true, None);
+    history.trust = TrustState::Allowed;
+    history.board_pane = Some(
+        BoardPane::new("Recent Activity")
+            .with_gauge(BoardGauge::new("Freshness", 80))
+            .with_summary("Last 7 days")
+            .add_item(
+                BoardItem::new("Today", "4 commits")
+                    .with_status(BoardStatus::Pass)
+                    .with_detail("Detailed today log"),
+            )
+            .add_item(BoardItem::new("Yesterday", "2 commits").with_status(BoardStatus::Info)),
+    );
+    model.extensions.push(history);
+
+    model.board_config.views = vec![BoardView {
+        name: "Extensions".to_string(),
+        left_ratio: 50,
+        left: vec![
+            PaneSlot::new(PaneId::Extension("history".to_string()), 50),
+            PaneSlot::new(PaneId::Extension("experimental".to_string()), 25),
+            PaneSlot::new(PaneId::Extension("missing".to_string()), 25),
+        ],
+        right: vec![PaneSlot::new(PaneId::OutputPreview, 100)],
+    }];
+    model.ensure_focus_visible();
+
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+    let view = terminal.backend().to_string();
+
+    assert!(view.contains("Recent Activity (sisho-history)"), "{view}");
+    assert!(view.contains("[████████░░]  80% Freshness"), "{view}");
+    assert!(view.contains("Last 7 days"), "{view}");
+    assert!(view.contains("> ✓ Today: 4 commits"), "{view}");
+    assert!(view.contains("• Yesterday: 2 commits"), "{view}");
+    assert!(view.contains("Detailed today log"), "{view}");
+    assert!(view.contains("[←↑↓→] Select Pane"), "{view}");
+
+    // Fallback states for untrusted & missing extension panes
+    assert!(view.contains("Ext: experimental [untrusted]"), "{view}");
+    assert!(view.contains("sisho-experimental is untrusted"), "{view}");
+    assert!(view.contains("Ext: missing"), "{view}");
+    assert!(
+        view.contains("Extension 'sisho-missing' not found on PATH."),
         "{view}"
     );
-    assert!(view.contains("[Esc/x] Close"), "{view}");
+}
+
+#[test]
+fn renders_layout_editor_modal_columns_ratio_weights_and_footer_hints() {
+    let backend = TestBackend::new(140, 36);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut model = create_mock_model();
+    let mut history = ExtensionItem::new("history", PathBuf::from("/bin/sisho-history"), true, None);
+    history.trust = TrustState::Allowed;
+    history.board_pane = Some(BoardPane::new("History"));
+    model.extensions.push(history);
+
+    model.open_layout_editor();
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+
+    let left_view = terminal.backend().to_string();
+    assert!(left_view.contains("Board Layout Editor"), "{left_view}");
+    assert!(left_view.contains("View 1/1: Overview"), "{left_view}");
+    assert!(left_view.contains("Left 45% | Right 55%"), "{left_view}");
+    assert!(left_view.contains("Left Column"), "{left_view}");
+    assert!(left_view.contains("Right Column"), "{left_view}");
+    assert!(left_view.contains("Available"), "{left_view}");
+    assert!(left_view.contains("> Tools & Extensions"), "{left_view}");
+    assert!(left_view.contains("w:55 (55%)"), "{left_view}");
+    assert!(left_view.contains("Ext: history [ext]"), "{left_view}");
+    assert!(left_view.contains("[←↑↓→] Cursor"), "{left_view}");
+    assert!(left_view.contains("[Space/Enter] Grab"), "{left_view}");
+    assert!(left_view.contains("[+/-] Size"), "{left_view}");
+    assert!(left_view.contains("[Del] Hide"), "{left_view}");
+    assert!(left_view.contains("[Esc/v] Close"), "{left_view}");
+    assert!(
+        left_view.contains("Layout Editor: Overview (Left)"),
+        "{left_view}"
+    );
+
+    // Grabbing highlights the pane with » and [MOVING] and updates footer hints
+    model.toggle_grab();
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+
+    let grabbed_view = terminal.backend().to_string();
+    assert!(
+        grabbed_view.contains("» [MOVING] Tools & Extensions"),
+        "{grabbed_view}"
+    );
+    assert!(grabbed_view.contains("[←↑↓→] Move Pane"), "{grabbed_view}");
+    assert!(grabbed_view.contains("[Space/Enter] Drop"), "{grabbed_view}");
+    assert!(grabbed_view.contains("[Esc] Release"), "{grabbed_view}");
+    assert!(
+        grabbed_view.contains("Moving pane: use arrow keys to position, Space/Enter to drop."),
+        "{grabbed_view}"
+    );
+
+    // Drop and move to Available column -> footer hints adapt
+    model.cancel_grab();
+    model.move_column_right();
+    model.move_column_right();
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+
+    let avail_view = terminal.backend().to_string();
+    assert!(avail_view.contains("> Ext: history [ext]"), "{avail_view}");
+    assert!(avail_view.contains("[←↑↓→] Cursor"), "{avail_view}");
+    assert!(avail_view.contains("[Space/Enter] Add & Grab"), "{avail_view}");
+    assert!(
+        avail_view.contains("Layout Editor: Overview (Available)"),
+        "{avail_view}"
+    );
+}
+
+#[test]
+fn renders_layout_editor_rename_input_and_confirm_banners() {
+    let backend = TestBackend::new(130, 36);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut model = create_mock_model();
+    model.add_view();
+    model.open_layout_editor();
+
+    // Rename mode
+    model.start_rename_view();
+    model.layout_editor.rename_buffer = Some("Writing".to_string());
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+    let rename_view = terminal.backend().to_string();
+    assert!(rename_view.contains("Rename view: Writing_"), "{rename_view}");
+    assert!(rename_view.contains("[Type] Name"), "{rename_view}");
+    assert!(rename_view.contains("[Enter] Save"), "{rename_view}");
+    assert!(
+        rename_view.contains("Renaming active board view..."),
+        "{rename_view}"
+    );
+    model.cancel_rename_view();
+
+    // Delete view confirmation banner
+    model.request_delete_view();
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+    let delete_view = terminal.backend().to_string();
+    assert!(
+        delete_view.contains("Delete view 'View 2'? [y] Yes · [n/Esc] Cancel"),
+        "{delete_view}"
+    );
+    assert!(delete_view.contains("[y] Confirm"), "{delete_view}");
+    model.cancel_editor_action();
+
+    // Reset default confirmation banner
+    model.request_reset_default();
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+    let reset_view = terminal.backend().to_string();
+    assert!(
+        reset_view.contains("Reset layout to default? [y] Yes · [n/Esc] Cancel"),
+        "{reset_view}"
+    );
+    assert!(
+        reset_view.contains("Reset layout to default?"),
+        "{reset_view}"
+    );
+}
+
+#[test]
+fn renders_active_pane_title_badge_and_active_footer_hints() {
+    let theme = sisho_tui::Theme::sisho();
+    let backend = TestBackend::new(120, 36);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut model = create_mock_model();
+    model.board_config.views = vec![BoardView {
+        name: "Checks".to_string(),
+        left_ratio: 50,
+        left: vec![PaneSlot::new(PaneId::Checks, 100)],
+        right: Vec::new(),
+    }];
+    model.ensure_focus_visible();
+    assert_eq!(model.focused_pane, PaneId::Checks);
+    assert!(!model.pane_active);
+
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+    let pane_select_buf = terminal.backend().buffer().clone();
+    let pane_select_view = terminal.backend().to_string();
+    assert!(!pane_select_view.contains("[ACTIVE]"), "{pane_select_view}");
+    assert_eq!(pane_select_buf[(0, 3)].symbol(), "┌");
+    assert_eq!(pane_select_buf[(118, 3)].symbol(), "─");
+    assert_eq!(pane_select_buf[(0, 4)].symbol(), "│");
+    assert_eq!(pane_select_buf[(0, 3)].fg, theme.border_focused);
+    assert!(
+        pane_select_view.contains("[←↑↓→] Select Pane · [Enter] Explore"),
+        "{pane_select_view}"
+    );
+
+    model.enter_pane();
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+    let active_buf = terminal.backend().buffer().clone();
+    let active_view = terminal.backend().to_string();
+    assert!(
+        active_view.contains("Integrity & Checks [ACTIVE]"),
+        "{active_view}"
+    );
+    assert_eq!(active_buf[(0, 3)].symbol(), "╔");
+    assert_eq!(active_buf[(118, 3)].symbol(), "═");
+    assert_eq!(active_buf[(0, 4)].symbol(), "║");
+    assert_eq!(active_buf[(0, 3)].fg, theme.warning);
+    assert!(
+        active_view.contains("[Esc] Panes · [j/k] Move"),
+        "{active_view}"
+    );
+    assert!(active_view.contains("[c] Check"), "{active_view}");
+    assert!(active_view.contains("[q] Quit"), "{active_view}");
 }

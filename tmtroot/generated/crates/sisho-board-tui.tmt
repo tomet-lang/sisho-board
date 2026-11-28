@@ -12,7 +12,7 @@ Two-tier design:
 
 extension board panes (`--sisho-board-pane`), integrity check outcomes, and broken links.
 
-- @strong[Counter]: Action prompt bar to run check, fix, check-links, manage extension trust, or open desk.
+- @strong[Counter]: Action prompt bar to run check, fix, check-links, manage extension trust, or launch TUI extensions.
 
 ==[Module screen]
 
@@ -32,13 +32,13 @@ Restore the terminal to cooked mode and exit alternate screen. Safe to call mult
 
 ==[Module ui]
 
-Ratatui rendering for `sisho-board` (Board + Counter).
+Ratatui rendering for `sisho-board` using the shared `sisho-tui` shell.
 
 ===[Functions]
 
 ====[fn draw]
 
-Render the complete sisho-board interface (Board + Counter).
+Render the complete `sisho-board` interface inside the shared `sisho-tui` shell.
 
 ==[Functions]
 

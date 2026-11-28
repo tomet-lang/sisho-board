@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -8,7 +9,8 @@ use sisho_board_run::{Outcome, Status};
 use sisho_board_sdk::{BoardGauge, BoardItem, BoardPane, BoardStatus};
 use sisho_sdk::{Capabilities, ExtensionInfo};
 
-use crate::config::BoardConfig;
+use sisho_board_config::{BoardConfig, BoardView, PaneId, PaneSlot};
+use crate::layout_editor::{EditorColumn, EditorConfirm, LayoutEditorState, MAX_LAYOUT_UNDO_HISTORY};
 use crate::model::{
     ExtensionItem, FocusedPane, Model, PendingTrustPrompt, PreviewSource, StepSlot, WorkerMessage,
 };
@@ -99,13 +101,16 @@ fn create_test_model() -> Model {
         selected_health_pillar: 0,
         selected_broken_link: 0,
         selected_ext_item: 0,
+        selected_standalone_ext_items: BTreeMap::new(),
         preview_scroll: 0,
         focused_pane: FocusedPane::Checks,
+        pane_active: false,
         preview_source: PreviewSource::CheckStep,
         confirm_fix: false,
         pending_trust: None,
         is_launcher_open: false,
         launcher_selected: 0,
+        layout_editor: LayoutEditorState::default(),
         message: None,
         is_checking: true,
         is_checking_links: false,
@@ -172,10 +177,28 @@ fn pane_focus_cycling_includes_health_and_updates_preview_source() {
         unreadable: Vec::new(),
     });
 
-    // Without extension panes: Checks -> Health -> Extensions -> BrokenLinks -> OutputPreview -> Checks
+    // Default Overview order:
+    // Left: [Extensions, BrokenLinks], Right: [Health, Checks, ExtensionPanes, OutputPreview]
     assert_eq!(model.focused_pane, FocusedPane::Checks);
     model.move_selection_down();
     assert_eq!(model.selected_step, 1);
+
+    model.next_pane();
+    assert_eq!(model.focused_pane, FocusedPane::ExtensionPanes);
+    assert_eq!(model.preview_source, PreviewSource::ExtensionItem);
+
+    model.next_pane();
+    assert_eq!(model.focused_pane, FocusedPane::OutputPreview);
+    model.move_selection_down();
+    assert_eq!(model.preview_scroll, 1);
+
+    model.next_pane();
+    assert_eq!(model.focused_pane, FocusedPane::Extensions);
+
+    model.next_pane();
+    assert_eq!(model.focused_pane, FocusedPane::BrokenLinks);
+    model.move_selection_down();
+    assert_eq!(model.selected_broken_link, 1);
 
     model.next_pane();
     assert_eq!(model.focused_pane, FocusedPane::Health);
@@ -198,21 +221,11 @@ fn pane_focus_cycling_includes_health_and_updates_preview_source() {
     );
 
     model.next_pane();
-    assert_eq!(model.focused_pane, FocusedPane::Extensions);
-
-    model.next_pane();
-    assert_eq!(model.focused_pane, FocusedPane::BrokenLinks);
-    model.move_selection_down();
-    assert_eq!(model.selected_broken_link, 1);
-
-    model.next_pane();
-    assert_eq!(model.focused_pane, FocusedPane::OutputPreview);
-    model.move_selection_down();
-    assert_eq!(model.preview_scroll, 1);
-
-    model.next_pane();
     assert_eq!(model.focused_pane, FocusedPane::Checks);
     assert_eq!(model.preview_source, PreviewSource::CheckStep);
+
+    model.prev_pane();
+    assert_eq!(model.focused_pane, FocusedPane::Health);
 }
 
 #[test]
@@ -579,46 +592,418 @@ fn launcher_trust_prompt_and_queried_updates_keep_selection_valid() {
 }
 
 #[test]
-fn launch_target_arg_uses_selected_broken_link_only_when_broken_links_focused() {
+fn view_switching_cycles_visible_panes_snaps_focus_and_persists() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "sisho-board-views-test-{}",
+        crate::unique_test_suffix()
+    ));
+    let _ = fs::remove_dir_all(&temp_dir);
+    let config_path = temp_dir.join("board.json");
+
     let mut model = create_test_model();
-    model.dir = PathBuf::from("/vault");
-    model.links_report = Some(Report {
-        files_scanned: 2,
-        links_checked: 2,
-        broken: vec![
-            BrokenLink {
-                source: PathBuf::from("docs/first.tmt"),
-                target: "missing.tmt".to_string(),
-                at: Some(Position { line: 3, column: 1 }),
-            },
-            BrokenLink {
-                source: PathBuf::from("docs/second.tmt"),
-                target: "gone.tmt".to_string(),
-                at: Some(Position { line: 7, column: 2 }),
-            },
-        ],
-        unreadable: Vec::new(),
+    model.board_config_path = Some(config_path.clone());
+    model.board_config.views.push(BoardView {
+        name: "Compact".to_string(),
+        left_ratio: 40,
+        left: vec![PaneSlot::new(PaneId::Health, 100)],
+        right: vec![PaneSlot::new(PaneId::OutputPreview, 100)],
     });
 
-    // Not focused on BrokenLinks -> returns root dir
-    model.focused_pane = FocusedPane::Checks;
-    assert_eq!(model.launch_target_arg(), PathBuf::from("/vault"));
+    assert_eq!(model.active_view_index(), 0);
+    assert_eq!(model.active_view().name, "Overview");
+    assert_eq!(model.focused_pane, PaneId::Checks);
 
-    // Focused on BrokenLinks -> returns joined source path for selected item
-    model.focused_pane = FocusedPane::BrokenLinks;
+    // Out-of-bounds select_view is a no-op
+    model.select_view(99);
+    assert_eq!(model.active_view_index(), 0);
+
+    // Switching to "Compact" snaps focus from Checks (absent) to Health (first visible)
+    model.next_view();
+    assert_eq!(model.active_view_index(), 1);
+    assert_eq!(model.active_view().name, "Compact");
+    assert_eq!(model.focused_pane, PaneId::Health);
+    assert_eq!(model.preview_source, PreviewSource::HealthPillar);
+
+    // Focus cycling only visits panes visible in "Compact"
+    model.focus_next_pane();
+    assert_eq!(model.focused_pane, PaneId::OutputPreview);
+    model.focus_next_pane();
+    assert_eq!(model.focused_pane, PaneId::Health);
+
+    // Verify active_view persisted to disk
+    let reloaded = BoardConfig::load_from(&config_path);
+    assert_eq!(reloaded.active_view, 1);
+
+    // Switching back wraps via prev_view and keeps Health since Health is in Overview
+    model.prev_view();
+    assert_eq!(model.active_view_index(), 0);
+    assert_eq!(model.focused_pane, PaneId::Health);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn standalone_extension_pane_focus_selection_and_preview() {
+    let mut model = create_test_model();
+    let mut history = ExtensionItem::new("history", PathBuf::from("/bin/sisho-history"), true, None);
+    history.trust = TrustState::Allowed;
+    history.board_pane = Some(
+        BoardPane::new("History")
+            .with_summary("Recent edits summary")
+            .add_item(BoardItem::new("today", "3 notes").with_detail("Today detail"))
+            .add_item(BoardItem::new("yesterday", "5 notes").with_detail("Yesterday detail")),
+    );
+    model.extensions.push(history);
+
+    model.board_config.views = vec![BoardView {
+        name: "Ext Focus".to_string(),
+        left_ratio: 50,
+        left: vec![PaneSlot::new(PaneId::Extension("history".to_string()), 100)],
+        right: vec![PaneSlot::new(PaneId::OutputPreview, 100)],
+    }];
+    model.ensure_focus_visible();
+
+    assert_eq!(model.focused_pane, PaneId::Extension("history".to_string()));
     assert_eq!(
-        model.launch_target_arg(),
-        PathBuf::from("/vault/docs/first.tmt")
+        model.preview_source,
+        PreviewSource::StandaloneExtensionItem("history".to_string())
+    );
+    assert_eq!(model.selected_preview_text().as_deref(), Some("Today detail"));
+
+    model.move_selection_down();
+    assert_eq!(model.selected_standalone_ext_item_index("history"), 1);
+    assert_eq!(
+        model.selected_preview_text().as_deref(),
+        Some("Yesterday detail")
     );
 
-    model.move_link_selection_down();
+    model.move_selection_up();
+    assert_eq!(model.selected_standalone_ext_item_index("history"), 0);
+}
+
+#[test]
+fn layout_editor_pane_editing_undo_and_persistence() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "sisho-board-editor-test-{}",
+        crate::unique_test_suffix()
+    ));
+    let _ = fs::remove_dir_all(&temp_dir);
+    let config_path = temp_dir.join("board.json");
+
+    let mut model = create_test_model();
+    model.board_config_path = Some(config_path.clone());
+
+    let mut history = ExtensionItem::new("history", PathBuf::from("/bin/sisho-history"), true, None);
+    history.trust = TrustState::Allowed;
+    history.board_pane = Some(BoardPane::new("History"));
+
+    let untrusted = ExtensionItem::new("secret", PathBuf::from("/bin/sisho-secret"), true, None);
+    model.extensions.push(history);
+    model.extensions.push(untrusted);
+
+    model.open_layout_editor();
+    assert!(model.layout_editor.is_open);
+    assert_eq!(model.layout_editor.column, EditorColumn::Left);
+    assert_eq!(model.layout_editor.selected, 0);
+
+    // Available panes contains allowed extension with board_pane, not untrusted or built-ins already in Overview
     assert_eq!(
-        model.launch_target_arg(),
-        PathBuf::from("/vault/docs/second.tmt")
+        model.available_panes(),
+        vec![PaneId::Extension("history".to_string())]
     );
 
-    // Empty broken links while focused -> falls back to root dir
-    model.links_report = Some(Report::default());
-    model.selected_broken_link = 0;
-    assert_eq!(model.launch_target_arg(), PathBuf::from("/vault"));
+    // Reorder Left[0] (Extensions) down -> [BrokenLinks, Extensions]
+    model.reorder_selected_pane_down();
+    assert_eq!(model.active_view().left[0].pane, PaneId::BrokenLinks);
+    assert_eq!(model.active_view().left[1].pane, PaneId::Extensions);
+    assert_eq!(model.layout_editor.selected, 1);
+
+    // Reorder back up
+    model.reorder_selected_pane_up();
+    assert_eq!(model.active_view().left[0].pane, PaneId::Extensions);
+    assert_eq!(model.layout_editor.selected, 0);
+
+    // Adjust selected pane weight (55 -> 60, and clamp 5..=100)
+    model.adjust_selected_pane_weight(5);
+    assert_eq!(model.active_view().left[0].weight, 60);
+    model.adjust_selected_pane_weight(200);
+    assert_eq!(model.active_view().left[0].weight, 100);
+    model.adjust_selected_pane_weight(-200);
+    assert_eq!(model.active_view().left[0].weight, 5);
+
+    // Adjust left_ratio (45 -> 50, clamped 20..=80)
+    model.adjust_left_ratio(5);
+    assert_eq!(model.active_view().left_ratio, 50);
+    model.adjust_left_ratio(-100);
+    assert_eq!(model.active_view().left_ratio, 20);
+    model.adjust_left_ratio(100);
+    assert_eq!(model.active_view().left_ratio, 80);
+
+    // Move Extensions from Left to Right
+    model.move_pane_between_columns();
+    assert_eq!(model.active_view().left.len(), 1);
+    assert_eq!(model.active_view().right.last().unwrap().pane, PaneId::Extensions);
+
+    // Remove BrokenLinks (Left[0]) -> moves to Available
+    model.remove_selected_pane();
+    assert!(model.active_view().left.is_empty());
+    assert!(model.available_panes().contains(&PaneId::BrokenLinks));
+
+    // Move column Right -> Available, then add first available pane to Left
+    model.move_column_right();
+    assert_eq!(model.layout_editor.column, EditorColumn::Right);
+    model.move_column_right();
+    assert_eq!(model.layout_editor.column, EditorColumn::Available);
+    let first_avail = model.available_panes()[0].clone();
+    model.add_available_pane_to(EditorColumn::Left);
+    assert_eq!(model.active_view().left.len(), 1);
+    assert_eq!(model.active_view().left[0].pane, first_avail);
+
+    // Undo restores step-by-step and persists
+    let before_undo = model.board_config.clone();
+    model.undo_layout_edit();
+    assert_ne!(model.board_config, before_undo);
+    assert!(model.active_view().left.is_empty());
+
+    let persisted = BoardConfig::load_from(&config_path);
+    assert_eq!(persisted, model.board_config);
+
+    model.close_layout_editor();
+    assert!(!model.layout_editor.is_open);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn layout_editor_view_crud_confirmations_and_undo_cap() {
+    let mut model = create_test_model();
+    model.open_layout_editor();
+
+    // Deleting the only remaining view is refused
+    model.request_delete_view();
+    assert_eq!(model.layout_editor.confirm_action, None);
+    assert!(model.message.as_deref().unwrap().contains("Cannot delete"));
+
+    // Add a new view
+    model.add_view();
+    assert_eq!(model.board_config.views.len(), 2);
+    assert_eq!(model.active_view_index(), 1);
+    assert_eq!(model.active_view().name, "View 2");
+
+    // Rename view (cancel preserves, commit updates)
+    model.start_rename_view();
+    assert_eq!(model.layout_editor.rename_buffer.as_deref(), Some("View 2"));
+    model.layout_editor.rename_buffer = Some("Temp".to_string());
+    model.cancel_rename_view();
+    assert_eq!(model.active_view().name, "View 2");
+
+    model.start_rename_view();
+    model.layout_editor.rename_buffer = Some("  Writing  ".to_string());
+    model.commit_rename_view();
+    assert_eq!(model.active_view().name, "Writing");
+
+    // Delete view confirmation flow
+    model.request_delete_view();
+    assert_eq!(
+        model.layout_editor.confirm_action,
+        Some(EditorConfirm::DeleteView)
+    );
+    model.cancel_editor_action();
+    assert_eq!(model.board_config.views.len(), 2);
+
+    model.request_delete_view();
+    model.confirm_editor_action();
+    assert_eq!(model.board_config.views.len(), 1);
+    assert_eq!(model.active_view().name, "Overview");
+
+    // Reset default confirmation flow
+    model.adjust_left_ratio(10);
+    assert_eq!(model.active_view().left_ratio, 55);
+    model.request_reset_default();
+    assert_eq!(
+        model.layout_editor.confirm_action,
+        Some(EditorConfirm::ResetDefault)
+    );
+    model.confirm_editor_action();
+    assert_eq!(model.active_view().left_ratio, 45);
+
+    // Undo restores pre-reset state
+    model.undo_layout_edit();
+    assert_eq!(model.active_view().left_ratio, 55);
+
+    // Undo stack is capped at MAX_LAYOUT_UNDO_HISTORY
+    for _ in 0..30 {
+        model.add_view();
+    }
+    assert_eq!(model.layout_editor.undo_stack.len(), MAX_LAYOUT_UNDO_HISTORY);
+}
+
+#[test]
+fn layout_editor_grab_and_drop_workflow_and_undo() {
+    let mut model = create_test_model();
+    let mut history = ExtensionItem::new("history", PathBuf::from("/bin/sisho-history"), true, None);
+    history.trust = TrustState::Allowed;
+    history.board_pane = Some(BoardPane::new("History"));
+    model.extensions.push(history);
+
+    model.open_layout_editor();
+    assert!(!model.layout_editor.grabbed);
+    assert_eq!(model.layout_editor.column, EditorColumn::Left);
+    assert_eq!(model.layout_editor.selected, 0);
+
+    // Grab Left[0] (Extensions)
+    model.toggle_grab();
+    assert!(model.layout_editor.grabbed);
+
+    // Move down -> swaps Left[0] and Left[1]
+    model.move_cursor_down();
+    assert!(model.layout_editor.grabbed);
+    assert_eq!(model.layout_editor.selected, 1);
+    assert_eq!(model.active_view().left[0].pane, PaneId::BrokenLinks);
+    assert_eq!(model.active_view().left[1].pane, PaneId::Extensions);
+
+    // Move up -> swaps back to index 0
+    model.move_cursor_up();
+    assert!(model.layout_editor.grabbed);
+    assert_eq!(model.layout_editor.selected, 0);
+    assert_eq!(model.active_view().left[0].pane, PaneId::Extensions);
+
+    // Move right -> transfers Extensions from Left[0] to Right[0] (inserts at 0.min(right.len()))
+    model.move_column_right();
+    assert!(model.layout_editor.grabbed);
+    assert_eq!(model.layout_editor.column, EditorColumn::Right);
+    assert_eq!(model.layout_editor.selected, 0);
+    assert_eq!(model.active_view().left.len(), 1);
+    assert_eq!(model.active_view().right[0].pane, PaneId::Extensions);
+
+    // Move left -> transfers back from Right[0] to Left[0]
+    model.move_column_left();
+    assert!(model.layout_editor.grabbed);
+    assert_eq!(model.layout_editor.column, EditorColumn::Left);
+    assert_eq!(model.layout_editor.selected, 0);
+    assert_eq!(model.active_view().left[0].pane, PaneId::Extensions);
+
+    // Move right to Right, then move right again -> hides to Available and auto-drops!
+    model.move_column_right();
+    assert!(model.layout_editor.grabbed);
+    model.move_column_right();
+    assert!(!model.layout_editor.grabbed);
+    assert_eq!(model.layout_editor.column, EditorColumn::Available);
+    let avail = model.available_panes();
+    assert_eq!(avail[model.layout_editor.selected], PaneId::Extensions);
+    assert!(!model.active_view().contains(&PaneId::Extensions));
+
+    // Selecting Available pane (`history`) and toggling grab adds to Left and grabs it immediately
+    let history_idx = avail
+        .iter()
+        .position(|p| p == &PaneId::Extension("history".to_string()))
+        .unwrap();
+    model.layout_editor.selected = history_idx;
+    model.toggle_grab();
+    assert!(model.layout_editor.grabbed);
+    assert_eq!(model.layout_editor.column, EditorColumn::Left);
+    assert_eq!(
+        model.active_view().left[model.layout_editor.selected].pane,
+        PaneId::Extension("history".to_string())
+    );
+
+    // Undo restores previous state and clears grabbed
+    model.undo_layout_edit();
+    assert!(!model.layout_editor.grabbed);
+    assert!(!model.active_view().contains(&PaneId::Extension("history".to_string())));
+
+    // Grab and cancel_grab drops without undoing
+    model.layout_editor.column = EditorColumn::Left;
+    model.layout_editor.selected = 0;
+    model.toggle_grab();
+    assert!(model.layout_editor.grabbed);
+    model.cancel_grab();
+    assert!(!model.layout_editor.grabbed);
+}
+
+#[test]
+fn spatial_2d_pane_navigation_and_enter_exit_pane() {
+    let mut model = create_test_model();
+    // Default Overview:
+    // Left:  [Extensions (0), BrokenLinks (1)]
+    // Right: [Health (0), Checks (1), ExtensionPanes (2), OutputPreview (3)]
+    assert_eq!(model.focused_pane, PaneId::Checks);
+    assert!(!model.pane_active);
+
+    // Move up/down within Right column
+    model.move_pane_up();
+    assert_eq!(model.focused_pane, PaneId::Health);
+    assert_eq!(model.preview_source, PreviewSource::HealthPillar);
+    model.move_pane_up(); // clamped at top
+    assert_eq!(model.focused_pane, PaneId::Health);
+
+    model.move_pane_down();
+    assert_eq!(model.focused_pane, PaneId::Checks);
+    model.move_pane_down();
+    assert_eq!(model.focused_pane, PaneId::ExtensionPanes);
+    model.move_pane_down();
+    assert_eq!(model.focused_pane, PaneId::OutputPreview);
+    model.move_pane_down(); // clamped at bottom
+    assert_eq!(model.focused_pane, PaneId::OutputPreview);
+
+    // Move left proportionally: Right[3] (3 * 2 / 4 = 1) -> Left[1] (BrokenLinks)
+    model.move_pane_left();
+    assert_eq!(model.focused_pane, PaneId::BrokenLinks);
+    model.move_pane_left(); // no-op when already in Left
+    assert_eq!(model.focused_pane, PaneId::BrokenLinks);
+
+    // Move up in Left -> Left[0] (Extensions)
+    model.move_pane_up();
+    assert_eq!(model.focused_pane, PaneId::Extensions);
+
+    // Move right proportionally: Left[0] (0 * 4 / 2 = 0) -> Right[0] (Health)
+    model.move_pane_right();
+    assert_eq!(model.focused_pane, PaneId::Health);
+
+    // Left[1] -> Right[2] (1 * 4 / 2 = 2 -> ExtensionPanes)
+    model.move_pane_left(); // Right[0] -> Left[0]
+    model.move_pane_down(); // Left[1] = BrokenLinks
+    model.move_pane_right();
+    assert_eq!(model.focused_pane, PaneId::ExtensionPanes);
+
+    // Enter & exit pane
+    model.enter_pane();
+    assert!(model.pane_active);
+    model.exit_pane();
+    assert!(!model.pane_active);
+
+    // pane_active resets on open_layout_editor
+    model.enter_pane();
+    assert!(model.pane_active);
+    model.open_layout_editor();
+    assert!(!model.pane_active);
+    model.close_layout_editor();
+
+    // pane_active resets on select_view
+    model.board_config.views.push(BoardView {
+        name: "SingleCol".to_string(),
+        left_ratio: 50,
+        left: vec![PaneSlot::new(PaneId::Checks, 100)],
+        right: Vec::new(),
+    });
+    model.enter_pane();
+    assert!(model.pane_active);
+    model.select_view(1);
+    assert!(!model.pane_active);
+    assert_eq!(model.focused_pane, PaneId::Checks);
+
+    // move_pane_right is a no-op when right column is empty
+    model.move_pane_right();
+    assert_eq!(model.focused_pane, PaneId::Checks);
+
+    // Empty view cannot enter_pane
+    model.board_config.views.push(BoardView {
+        name: "Empty".to_string(),
+        left_ratio: 50,
+        left: Vec::new(),
+        right: Vec::new(),
+    });
+    model.select_view(2);
+    model.enter_pane();
+    assert!(!model.pane_active);
 }
