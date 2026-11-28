@@ -675,16 +675,25 @@ dependencies = [
  "sisho-board-run",
  "sisho-board-sdk",
  "sisho-sdk",
+ "sisho-tui",
 ]
 
 [[package]]
 name = "sisho-sdk"
 version = "0.1.0"
-source = "git+https://github.com/tomet-lang/sisho.git#8254e5621b1a6a3bf480448190a0a33dd010be7c"
+source = "git+https://github.com/tomet-lang/sisho.git#d660a8a8d6df907123f14328997b71c3e0bb7cfe"
 dependencies = [
  "jobserver-gate",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "sisho-tui"
+version = "0.1.0"
+source = "git+https://github.com/tomet-lang/sisho.git#d660a8a8d6df907123f14328997b71c3e0bb7cfe"
+dependencies = [
+ "ratatui",
 ]
 
 [[package]]

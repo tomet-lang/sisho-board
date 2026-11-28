@@ -1,62 +1,80 @@
-//! Ratatui rendering for `sisho-board` (Board + Counter).
+//! Ratatui rendering for `sisho-board` using the shared `sisho-tui` shell.
 
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{List, ListItem, Paragraph, Wrap},
 };
 use sisho_board_core::model::{FocusedPane, Model, PreviewSource, StepSlot};
 use sisho_board_core::tools::Verdict;
 use sisho_board_core::trust::TrustState;
-use sisho_board_run::Status;
+use sisho_board_run::{Outcome, Status};
 use sisho_board_sdk::BoardStatus;
+use sisho_tui::{FooterBar, HeaderBar, KeyHint, ShellLayout, StatusLine, Theme};
 
-/// Render the complete sisho-board interface (Board + Counter).
+/// Render the complete `sisho-board` interface inside the shared `sisho-tui` shell.
 pub fn draw(f: &mut Frame, model: &Model) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(12), Constraint::Length(4)])
-        .split(f.area());
+    let theme = Theme::sisho();
+    let shell = ShellLayout::split(f.area());
 
-    draw_board(f, chunks[0], model);
-    draw_counter(f, chunks[1], model);
+    HeaderBar::new("sisho-board")
+        .context("Project Status")
+        .render(f, shell.header, &theme);
+
+    draw_board(f, shell.body, model, &theme);
+    draw_footer(f, shell.footer, model, &theme);
 }
 
-fn draw_board(f: &mut Frame, area: Rect, model: &Model) {
-    let board_block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Sisho Board (Project Status) ")
-        .title_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
-
-    let inner = board_block.inner(area);
-    f.render_widget(board_block, area);
-
+fn draw_board(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-        .split(inner);
+        .split(area);
 
-    draw_left_column(f, columns[0], model);
-    draw_right_column(f, columns[1], model);
+    draw_left_column(f, columns[0], model, theme);
+    draw_right_column(f, columns[1], model, theme);
 }
 
-fn draw_left_column(f: &mut Frame, area: Rect, model: &Model) {
+fn draw_left_column(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
         .split(area);
 
-    draw_tools_and_extensions(f, rows[0], model);
-    draw_broken_links(f, rows[1], model);
+    draw_tools_and_extensions(f, rows[0], model, theme);
+    draw_broken_links(f, rows[1], model, theme);
 }
 
-fn draw_tools_and_extensions(f: &mut Frame, area: Rect, model: &Model) {
+fn cursor_style(is_selected: bool, theme: &Theme) -> Style {
+    if is_selected {
+        Style::default().fg(theme.primary)
+    } else {
+        Style::default()
+    }
+}
+
+fn board_status_icon(status: BoardStatus, theme: &Theme) -> (&'static str, Style) {
+    match status {
+        BoardStatus::Pass => ("✓ ", Style::default().fg(theme.success)),
+        BoardStatus::Warn => (
+            "! ",
+            Style::default()
+                .fg(theme.warning)
+                .add_modifier(Modifier::BOLD),
+        ),
+        BoardStatus::Fail => (
+            "✗ ",
+            Style::default()
+                .fg(theme.error)
+                .add_modifier(Modifier::BOLD),
+        ),
+        BoardStatus::Info => ("• ", Style::default().fg(theme.info)),
+    }
+}
+
+fn draw_tools_and_extensions(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let is_focused = model.focused_pane == FocusedPane::Extensions;
     let mut items = Vec::new();
 
@@ -65,14 +83,14 @@ fn draw_tools_and_extensions(f: &mut Frame, area: Rect, model: &Model) {
         "Core Tools:",
         Style::default()
             .add_modifier(Modifier::BOLD)
-            .fg(Color::Yellow),
+            .fg(theme.warning),
     )])));
 
     for tool in &model.tools {
         let (icon, icon_style) = match &tool.verdict {
-            Verdict::Fine(_) => ("  ✓ ", Style::default().fg(Color::Green)),
-            Verdict::TooOld { .. } => ("  ✗ ", Style::default().fg(Color::Red)),
-            Verdict::Unreported { .. } => ("  - ", Style::default().fg(Color::DarkGray)),
+            Verdict::Fine(_) => ("  ✓ ", Style::default().fg(theme.success)),
+            Verdict::TooOld { .. } => ("  ✗ ", Style::default().fg(theme.error)),
+            Verdict::Unreported { .. } => ("  - ", Style::default().fg(theme.muted)),
         };
 
         let ver_str = tool.version.as_deref().unwrap_or("not found");
@@ -95,13 +113,13 @@ fn draw_tools_and_extensions(f: &mut Frame, area: Rect, model: &Model) {
         "Installed Extensions:",
         Style::default()
             .add_modifier(Modifier::BOLD)
-            .fg(Color::Yellow),
+            .fg(theme.warning),
     )])));
 
     if model.extensions.is_empty() {
         items.push(ListItem::new(Line::from(vec![Span::styled(
             "  (none found on PATH)",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )])));
     } else {
         for (idx, ext) in model.extensions.iter().enumerate() {
@@ -111,30 +129,23 @@ fn draw_tools_and_extensions(f: &mut Frame, area: Rect, model: &Model) {
             let (trust_icon, trust_style, trust_badge) = match ext.trust {
                 TrustState::Allowed => (
                     "✓ ",
-                    Style::default().fg(Color::Green),
-                    Span::styled(" [allowed]", Style::default().fg(Color::Green)),
+                    Style::default().fg(theme.success),
+                    Span::styled(" [allowed]", Style::default().fg(theme.success)),
                 ),
                 TrustState::Untrusted => (
                     "? ",
-                    Style::default().fg(Color::Yellow),
-                    Span::styled(" [untrusted: a/Enter]", Style::default().fg(Color::Yellow)),
+                    Style::default().fg(theme.warning),
+                    Span::styled(" [untrusted: a/Enter]", Style::default().fg(theme.warning)),
                 ),
                 TrustState::Denied => (
                     "✗ ",
-                    Style::default().fg(Color::Red),
-                    Span::styled(" [denied: a/Enter]", Style::default().fg(Color::Red)),
+                    Style::default().fg(theme.error),
+                    Span::styled(" [denied: a/Enter]", Style::default().fg(theme.error)),
                 ),
             };
 
             let mut header_spans = vec![
-                Span::styled(
-                    cursor,
-                    if is_selected {
-                        Style::default().fg(Color::Cyan)
-                    } else {
-                        Style::default()
-                    },
-                ),
+                Span::styled(cursor, cursor_style(is_selected, theme)),
                 Span::styled(trust_icon, trust_style),
                 Span::styled(
                     &ext.word,
@@ -149,7 +160,7 @@ fn draw_tools_and_extensions(f: &mut Frame, area: Rect, model: &Model) {
             if let Some(info) = &ext.info {
                 header_spans.push(Span::styled(
                     format!(" v{}", info.version),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(theme.secondary),
                 ));
             }
 
@@ -159,7 +170,7 @@ fn draw_tools_and_extensions(f: &mut Frame, area: Rect, model: &Model) {
                 header_spans.push(Span::raw(" "));
                 header_spans.push(Span::styled(
                     format!("({note})"),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.warning),
                 ));
             }
 
@@ -170,7 +181,7 @@ fn draw_tools_and_extensions(f: &mut Frame, area: Rect, model: &Model) {
             {
                 items.push(ListItem::new(Line::from(vec![
                     Span::raw("    "),
-                    Span::styled(&info.about, Style::default().fg(Color::Gray)),
+                    Span::styled(&info.about, Style::default().fg(theme.inactive_tab_fg)),
                 ])));
             }
 
@@ -178,31 +189,13 @@ fn draw_tools_and_extensions(f: &mut Frame, area: Rect, model: &Model) {
                 Span::raw("    "),
                 Span::styled(
                     ext.path.display().to_string(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.muted),
                 ),
             ])));
         }
     }
 
-    let border_style = if is_focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default()
-    };
-
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(" Tools & Extensions ")
-            .title_style(if is_focused {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            }),
-    );
+    let list = List::new(items).block(theme.pane_block(" Tools & Extensions ", is_focused));
     f.render_widget(list, area);
 }
 
@@ -212,7 +205,7 @@ fn spinner(tick: usize) -> &'static str {
     SPINNER[tick % SPINNER.len()]
 }
 
-fn draw_broken_links(f: &mut Frame, area: Rect, model: &Model) {
+fn draw_broken_links(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let is_focused = model.focused_pane == FocusedPane::BrokenLinks;
     let broken = model.broken_links();
     let mut items = Vec::new();
@@ -220,10 +213,10 @@ fn draw_broken_links(f: &mut Frame, area: Rect, model: &Model) {
     if model.is_checking_links && model.links_report.is_none() {
         let spin = spinner(model.tick);
         items.push(ListItem::new(Line::from(vec![
-            Span::styled(format!("  {spin} "), Style::default().fg(Color::Cyan)),
+            Span::styled(format!("  {spin} "), Style::default().fg(theme.primary)),
             Span::styled(
                 "Scanning links in background...",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.warning),
             ),
         ])));
     } else {
@@ -233,14 +226,14 @@ fn draw_broken_links(f: &mut Frame, area: Rect, model: &Model) {
                     "Scanned {} files ({} links checked)",
                     report.files_scanned, report.links_checked
                 ),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.muted),
             )])));
         }
 
         if broken.is_empty() {
             items.push(ListItem::new(Line::from(vec![Span::styled(
                 "✓ No broken links found",
-                Style::default().fg(Color::Green),
+                Style::default().fg(theme.success),
             )])));
         } else {
             let available_height = area.height.saturating_sub(3) as usize;
@@ -262,15 +255,8 @@ fn draw_broken_links(f: &mut Frame, area: Rect, model: &Model) {
                 let cursor = if is_selected { "> " } else { "  " };
                 let at_str = link.at.map(|p| format!(":{}", p.line)).unwrap_or_default();
                 items.push(ListItem::new(Line::from(vec![
-                    Span::styled(
-                        cursor,
-                        if is_selected {
-                            Style::default().fg(Color::Cyan)
-                        } else {
-                            Style::default()
-                        },
-                    ),
-                    Span::styled("✗ ", Style::default().fg(Color::Red)),
+                    Span::styled(cursor, cursor_style(is_selected, theme)),
+                    Span::styled("✗ ", Style::default().fg(theme.error)),
                     Span::styled(
                         format!("{}{at_str}", link.source.display()),
                         if is_selected {
@@ -299,29 +285,11 @@ fn draw_broken_links(f: &mut Frame, area: Rect, model: &Model) {
         format!(" Broken Links ({}) ", broken.len())
     };
 
-    let border_style = if is_focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default()
-    };
-
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title)
-            .title_style(if is_focused {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            }),
-    );
+    let list = List::new(items).block(theme.pane_block(title, is_focused));
     f.render_widget(list, area);
 }
 
-fn draw_right_column(f: &mut Frame, area: Rect, model: &Model) {
+fn draw_right_column(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let cmd_count = if model.check_slots.is_empty() {
         sisho_board_core::tools::check_steps(&model.dir).len()
     } else {
@@ -343,10 +311,10 @@ fn draw_right_column(f: &mut Frame, area: Rect, model: &Model) {
             ])
             .split(area);
 
-        draw_checks(f, rows[0], model);
-        draw_health(f, rows[1], model);
-        draw_extension_panes(f, rows[2], model);
-        draw_output_preview(f, rows[3], model);
+        draw_checks(f, rows[0], model, theme);
+        draw_health(f, rows[1], model, theme);
+        draw_extension_panes(f, rows[2], model, theme);
+        draw_output_preview(f, rows[3], model, theme);
     } else {
         let rows = Layout::default()
             .direction(Direction::Vertical)
@@ -357,23 +325,23 @@ fn draw_right_column(f: &mut Frame, area: Rect, model: &Model) {
             ])
             .split(area);
 
-        draw_checks(f, rows[0], model);
-        draw_health(f, rows[1], model);
-        draw_output_preview(f, rows[2], model);
+        draw_checks(f, rows[0], model, theme);
+        draw_health(f, rows[1], model, theme);
+        draw_output_preview(f, rows[2], model, theme);
     }
 }
 
-fn draw_health(f: &mut Frame, area: Rect, model: &Model) {
+fn draw_health(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let is_focused = model.focused_pane == FocusedPane::Health;
     let mut items = Vec::new();
 
     if let Some(report) = &model.health_report {
         let bar = format_gauge_bar(report.overall_percent, 10);
         let bar_color = match sisho_board_health::status_for_percent(report.overall_percent) {
-            BoardStatus::Pass => Color::Green,
-            BoardStatus::Warn => Color::Yellow,
-            BoardStatus::Fail => Color::Red,
-            BoardStatus::Info => Color::Cyan,
+            BoardStatus::Pass => theme.success,
+            BoardStatus::Warn => theme.warning,
+            BoardStatus::Fail => theme.error,
+            BoardStatus::Info => theme.info,
         };
         items.push(ListItem::new(Line::from(vec![
             Span::raw("  "),
@@ -388,30 +356,10 @@ fn draw_health(f: &mut Frame, area: Rect, model: &Model) {
         for (idx, pillar) in report.pillars().into_iter().enumerate() {
             let is_selected = is_focused && idx == model.selected_health_pillar;
             let cursor = if is_selected { "> " } else { "  " };
-            let (status_icon, status_style) = match pillar.status {
-                BoardStatus::Pass => ("✓ ", Style::default().fg(Color::Green)),
-                BoardStatus::Warn => (
-                    "! ",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                BoardStatus::Fail => (
-                    "✗ ",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                ),
-                BoardStatus::Info => ("• ", Style::default().fg(Color::Cyan)),
-            };
+            let (status_icon, status_style) = board_status_icon(pillar.status, theme);
 
             items.push(ListItem::new(Line::from(vec![
-                Span::styled(
-                    cursor,
-                    if is_selected {
-                        Style::default().fg(Color::Cyan)
-                    } else {
-                        Style::default()
-                    },
-                ),
+                Span::styled(cursor, cursor_style(is_selected, theme)),
                 Span::styled(status_icon, status_style),
                 Span::styled(
                     &pillar.name,
@@ -428,10 +376,10 @@ fn draw_health(f: &mut Frame, area: Rect, model: &Model) {
     } else {
         let spin = spinner(model.tick);
         items.push(ListItem::new(Line::from(vec![
-            Span::styled(format!("  {spin} "), Style::default().fg(Color::Cyan)),
+            Span::styled(format!("  {spin} "), Style::default().fg(theme.primary)),
             Span::styled(
                 "Measuring vault readiness & health...",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.warning),
             ),
         ])));
     }
@@ -442,25 +390,7 @@ fn draw_health(f: &mut Frame, area: Rect, model: &Model) {
         " Vault Readiness & Health "
     };
 
-    let border_style = if is_focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default()
-    };
-
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title)
-            .title_style(if is_focused {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            }),
-    );
+    let list = List::new(items).block(theme.pane_block(title, is_focused));
     f.render_widget(list, area);
 }
 
@@ -483,10 +413,15 @@ fn format_gauge_bar(percent: u8, width: usize) -> String {
     let clamped = percent.min(100) as usize;
     let filled = (clamped * width + 50) / 100;
     let empty = width.saturating_sub(filled);
-    format!("[{}{}] {:>3}%", "█".repeat(filled), "░".repeat(empty), clamped)
+    format!(
+        "[{}{}] {:>3}%",
+        "█".repeat(filled),
+        "░".repeat(empty),
+        clamped
+    )
 }
 
-fn draw_extension_panes(f: &mut Frame, area: Rect, model: &Model) {
+fn draw_extension_panes(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let is_focused = model.focused_pane == FocusedPane::ExtensionPanes;
     let panes = model.active_extension_panes();
     let mut items = Vec::new();
@@ -497,7 +432,7 @@ fn draw_extension_panes(f: &mut Frame, area: Rect, model: &Model) {
             items.push(ListItem::new(Line::from(vec![Span::styled(
                 format!("{} (sisho-{word}):", pane.title),
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.warning)
                     .add_modifier(Modifier::BOLD),
             )])));
         }
@@ -505,11 +440,11 @@ fn draw_extension_panes(f: &mut Frame, area: Rect, model: &Model) {
         if let Some(gauge) = &pane.gauge {
             let bar = format_gauge_bar(gauge.percent, 10);
             let bar_color = if gauge.percent >= 80 {
-                Color::Green
+                theme.success
             } else if gauge.percent >= 50 {
-                Color::Yellow
+                theme.warning
             } else {
-                Color::Red
+                theme.error
             };
             items.push(ListItem::new(Line::from(vec![
                 Span::raw("  "),
@@ -525,30 +460,10 @@ fn draw_extension_panes(f: &mut Frame, area: Rect, model: &Model) {
         for item in &pane.items {
             let is_selected = is_focused && flat_idx == model.selected_ext_item;
             let cursor = if is_selected { "> " } else { "  " };
-            let (status_icon, status_style) = match item.status {
-                BoardStatus::Pass => ("✓ ", Style::default().fg(Color::Green)),
-                BoardStatus::Warn => (
-                    "! ",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                BoardStatus::Fail => (
-                    "✗ ",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                ),
-                BoardStatus::Info => ("• ", Style::default().fg(Color::Cyan)),
-            };
+            let (status_icon, status_style) = board_status_icon(item.status, theme);
 
             items.push(ListItem::new(Line::from(vec![
-                Span::styled(
-                    cursor,
-                    if is_selected {
-                        Style::default().fg(Color::Cyan)
-                    } else {
-                        Style::default()
-                    },
-                ),
+                Span::styled(cursor, cursor_style(is_selected, theme)),
                 Span::styled(status_icon, status_style),
                 Span::styled(
                     &item.label,
@@ -572,29 +487,11 @@ fn draw_extension_panes(f: &mut Frame, area: Rect, model: &Model) {
         " Extension Panes ".to_string()
     };
 
-    let border_style = if is_focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default()
-    };
-
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title)
-            .title_style(if is_focused {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            }),
-    );
+    let list = List::new(items).block(theme.pane_block(title, is_focused));
     f.render_widget(list, area);
 }
 
-fn draw_checks(f: &mut Frame, area: Rect, model: &Model) {
+fn draw_checks(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let is_focused = model.focused_pane == FocusedPane::Checks;
     let mut items = Vec::new();
 
@@ -602,19 +499,19 @@ fn draw_checks(f: &mut Frame, area: Rect, model: &Model) {
         if model.is_checking {
             let spin = spinner(model.tick);
             items.push(ListItem::new(Line::from(vec![
-                Span::styled(format!("  {spin} "), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("  {spin} "), Style::default().fg(theme.primary)),
                 Span::styled(
                     "Running checks in background...",
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.warning),
                 ),
             ])));
         } else if model.is_fixing {
             let spin = spinner(model.tick);
             items.push(ListItem::new(Line::from(vec![
-                Span::styled(format!("  {spin} "), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("  {spin} "), Style::default().fg(theme.primary)),
                 Span::styled(
                     "Applying fixes in background...",
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.warning),
                 ),
             ])));
         } else {
@@ -628,26 +525,21 @@ fn draw_checks(f: &mut Frame, area: Rect, model: &Model) {
             let line = match slot {
                 StepSlot::Done(outcome) => {
                     let (status_icon, status_style) = match outcome.status {
-                        Status::Passed => ("✓ ", Style::default().fg(Color::Green)),
+                        Status::Passed => ("✓ ", Style::default().fg(theme.success)),
                         Status::Failed { .. } => (
                             "✗ ",
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(theme.error)
+                                .add_modifier(Modifier::BOLD),
                         ),
-                        Status::NotFound => ("- ", Style::default().fg(Color::Yellow)),
-                        Status::CouldNotStart { .. } => ("! ", Style::default().fg(Color::Red)),
+                        Status::NotFound => ("- ", Style::default().fg(theme.warning)),
+                        Status::CouldNotStart { .. } => ("! ", Style::default().fg(theme.error)),
                         Status::Signalled { .. } => ("! ", Style::default().fg(Color::Magenta)),
                     };
 
                     let duration_str = format!("({:.2}s)", outcome.duration.as_secs_f64());
                     Line::from(vec![
-                        Span::styled(
-                            cursor,
-                            if is_selected {
-                                Style::default().fg(Color::Cyan)
-                            } else {
-                                Style::default()
-                            },
-                        ),
+                        Span::styled(cursor, cursor_style(is_selected, theme)),
                         Span::styled(status_icon, status_style),
                         Span::styled(
                             &outcome.name,
@@ -658,21 +550,14 @@ fn draw_checks(f: &mut Frame, area: Rect, model: &Model) {
                             },
                         ),
                         Span::raw(" "),
-                        Span::styled(duration_str, Style::default().fg(Color::DarkGray)),
+                        Span::styled(duration_str, Style::default().fg(theme.muted)),
                     ])
                 }
                 StepSlot::Running { name } => {
                     let spin = spinner(model.tick.wrapping_add(i));
                     Line::from(vec![
-                        Span::styled(
-                            cursor,
-                            if is_selected {
-                                Style::default().fg(Color::Cyan)
-                            } else {
-                                Style::default()
-                            },
-                        ),
-                        Span::styled(format!("{spin} "), Style::default().fg(Color::Cyan)),
+                        Span::styled(cursor, cursor_style(is_selected, theme)),
+                        Span::styled(format!("{spin} "), Style::default().fg(theme.primary)),
                         Span::styled(
                             name,
                             if is_selected {
@@ -682,7 +567,7 @@ fn draw_checks(f: &mut Frame, area: Rect, model: &Model) {
                             },
                         ),
                         Span::raw(" "),
-                        Span::styled("(running...)", Style::default().fg(Color::Yellow)),
+                        Span::styled("(running...)", Style::default().fg(theme.warning)),
                     ])
                 }
             };
@@ -699,29 +584,11 @@ fn draw_checks(f: &mut Frame, area: Rect, model: &Model) {
         " Integrity & Checks "
     };
 
-    let border_style = if is_focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default()
-    };
-
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title)
-            .title_style(if is_focused {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            }),
-    );
+    let list = List::new(items).block(theme.pane_block(title, is_focused));
     f.render_widget(list, area);
 }
 
-fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model) {
+fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     let is_focused = model.focused_pane == FocusedPane::OutputPreview;
     let mut total_lines = 0;
 
@@ -730,7 +597,7 @@ fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model) {
             if let Some(pillar) = model.selected_health_pillar_metric() {
                 let mut lines = Vec::new();
                 lines.push(Line::from(vec![
-                    Span::styled("Pillar: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Pillar: ", Style::default().fg(theme.muted)),
                     Span::styled(
                         format!("{} — {}", pillar.name, pillar.value_summary),
                         Style::default().add_modifier(Modifier::BOLD),
@@ -750,11 +617,11 @@ fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model) {
             if let Some(ext_ref) = model.selected_extension_pane_item() {
                 let mut lines = Vec::new();
                 lines.push(Line::from(vec![
-                    Span::styled("Extension: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Extension: ", Style::default().fg(theme.muted)),
                     Span::raw(format!("sisho-{} — {}", ext_ref.word, ext_ref.pane.title)),
                 ]));
                 lines.push(Line::from(vec![
-                    Span::styled("Item: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Item: ", Style::default().fg(theme.muted)),
                     Span::styled(
                         format!("{}: {}", ext_ref.item.label, ext_ref.item.value),
                         Style::default().add_modifier(Modifier::BOLD),
@@ -775,7 +642,7 @@ fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model) {
                     lines.push(Line::from(""));
                     lines.push(Line::from(Span::styled(
                         "(no additional detail for this item)",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.muted),
                     )));
                 }
                 total_lines = lines.len();
@@ -788,7 +655,7 @@ fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model) {
             if let Some(outcome) = model.selected_outcome() {
                 let mut lines = Vec::new();
                 lines.push(Line::from(vec![
-                    Span::styled("Command: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Command: ", Style::default().fg(theme.muted)),
                     Span::raw(&outcome.command_line),
                 ]));
 
@@ -796,7 +663,7 @@ fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model) {
                     lines.push(Line::from(""));
                     lines.push(Line::from(Span::styled(
                         "--- stdout ---",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.muted),
                     )));
                     for l in outcome.stdout.lines() {
                         lines.push(Line::from(l));
@@ -806,10 +673,13 @@ fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model) {
                     lines.push(Line::from(""));
                     lines.push(Line::from(Span::styled(
                         "--- stderr ---",
-                        Style::default().fg(Color::Red),
+                        Style::default().fg(theme.error),
                     )));
                     for l in outcome.stderr.lines() {
-                        lines.push(Line::from(Span::styled(l, Style::default().fg(Color::Red))));
+                        lines.push(Line::from(Span::styled(
+                            l,
+                            Style::default().fg(theme.error),
+                        )));
                     }
                 }
 
@@ -817,7 +687,7 @@ fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model) {
                     lines.push(Line::from(""));
                     lines.push(Line::from(Span::styled(
                         "(no output produced)",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.muted),
                     )));
                 }
 
@@ -844,193 +714,139 @@ fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model) {
         " Step Output Preview ".to_string()
     };
 
-    let border_style = if is_focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default()
-    };
-
     let paragraph = Paragraph::new(content)
         .scroll((scroll_y as u16, 0))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .title(title)
-                .title_style(if is_focused {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                }),
-        )
+        .block(theme.pane_block(title, is_focused))
         .wrap(Wrap { trim: true });
 
     f.render_widget(paragraph, area);
 }
 
-fn draw_counter(f: &mut Frame, area: Rect, model: &Model) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Counter (Actions) ")
-        .title_style(
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        );
-
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let mut lines = Vec::new();
-
+fn draw_footer(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     if let Some(prompt) = &model.pending_trust {
-        lines.push(Line::from(vec![Span::styled(
-            format!(
-                "Trust for 'sisho-{}' ({}):",
-                prompt.word,
-                prompt.canonical_path.display()
-            ),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]));
-        lines.push(Line::from(vec![
-            Span::styled(
-                "[y] Allow (execute)",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("   "),
-            Span::styled(
-                "[d] Deny (block)",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("   "),
-            Span::styled(
-                "[u] Untrusted",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("   "),
-            Span::styled(
-                "[n/Esc] Cancel",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-    } else if model.confirm_fix {
-        lines.push(Line::from(vec![
-            Span::styled(
-                " Apply fixes across the project? (writes files)  ",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "[y] Yes, apply fixes",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("    "),
-            Span::styled(
-                "[n/Esc] Cancel",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-        ]));
-    } else {
-        let focus_desc = match model.focused_pane {
-            FocusedPane::Checks => "Checks",
-            FocusedPane::Health => "Health",
-            FocusedPane::Extensions => "Extensions",
-            FocusedPane::BrokenLinks => "Links",
-            FocusedPane::ExtensionPanes => "ExtPane",
-            FocusedPane::OutputPreview => "Preview",
-        };
-
-        let mut action_spans = vec![
-            Span::styled("[Tab]", Style::default().fg(Color::Cyan)),
-            Span::raw(format!(" Pane:{focus_desc}   ")),
+        let hints = [
+            KeyHint::new("y", "Allow (execute)"),
+            KeyHint::new("d", "Deny (block)"),
+            KeyHint::new("u", "Untrusted"),
+            KeyHint::new("n/Esc", "Cancel"),
         ];
+        let status = StatusLine::info(format!(
+            "Trust for 'sisho-{}' ({}):",
+            prompt.word,
+            prompt.canonical_path.display()
+        ));
+        FooterBar::new()
+            .hints(&hints)
+            .status(Some(status))
+            .render(f, area, theme);
+        return;
+    }
 
-        match model.focused_pane {
-            FocusedPane::Extensions => {
-                if !model.extensions.is_empty() {
-                    action_spans.push(Span::styled(
-                        "[a/Enter]",
-                        Style::default().fg(Color::Yellow),
-                    ));
-                    action_spans.push(Span::raw(" Change Trust   "));
-                }
-                action_spans.push(Span::styled("[↑/k ↓/j]", Style::default().fg(Color::Cyan)));
-                action_spans.push(Span::raw(" Move   "));
+    if model.confirm_fix {
+        let hints = [
+            KeyHint::new("y", "Yes, apply fixes"),
+            KeyHint::new("n/Esc", "Cancel"),
+        ];
+        let status = StatusLine::info("Apply fixes across the project? (writes files)");
+        FooterBar::new()
+            .hints(&hints)
+            .status(Some(status))
+            .render(f, area, theme);
+        return;
+    }
+
+    let focus_desc = match model.focused_pane {
+        FocusedPane::Checks => "Pane:Checks",
+        FocusedPane::Health => "Pane:Health",
+        FocusedPane::Extensions => "Pane:Extensions",
+        FocusedPane::BrokenLinks => "Pane:Links",
+        FocusedPane::ExtensionPanes => "Pane:ExtPane",
+        FocusedPane::OutputPreview => "Pane:Preview",
+    };
+
+    let mut hints = vec![KeyHint::new("Tab", focus_desc)];
+
+    match model.focused_pane {
+        FocusedPane::Extensions => {
+            if !model.extensions.is_empty() {
+                hints.push(KeyHint::new("a/Enter", "Change Trust"));
             }
-            FocusedPane::BrokenLinks => {
-                if !model.broken_links().is_empty() {
-                    action_spans.push(Span::styled(
-                        "[Enter/e]",
-                        Style::default().fg(Color::Yellow),
-                    ));
-                    action_spans.push(Span::raw(" Edit   "));
-                }
-                action_spans.push(Span::styled("[d]", Style::default().fg(Color::Cyan)));
-                action_spans.push(Span::raw(" Desk   "));
-                action_spans.push(Span::styled("[↑/k ↓/j]", Style::default().fg(Color::Cyan)));
-                action_spans.push(Span::raw(" Move   "));
-            }
-            FocusedPane::Checks | FocusedPane::Health | FocusedPane::ExtensionPanes => {
-                action_spans.push(Span::styled("[↑/k ↓/j]", Style::default().fg(Color::Cyan)));
-                action_spans.push(Span::raw(" Move   "));
-                action_spans.push(Span::styled("[d]", Style::default().fg(Color::Cyan)));
-                action_spans.push(Span::raw(" Desk   "));
-            }
-            FocusedPane::OutputPreview => {
-                action_spans.push(Span::styled("[↑/k ↓/j]", Style::default().fg(Color::Cyan)));
-                action_spans.push(Span::raw(" Scroll   "));
-                action_spans.push(Span::styled("[d]", Style::default().fg(Color::Cyan)));
-                action_spans.push(Span::raw(" Desk   "));
-            }
+            hints.push(KeyHint::new("j/k", "Move"));
         }
-
-        action_spans.push(Span::styled("[c]", Style::default().fg(Color::Cyan)));
-        action_spans.push(Span::raw(" Check   "));
-        action_spans.push(Span::styled("[f]", Style::default().fg(Color::Cyan)));
-        action_spans.push(Span::raw(" Fix   "));
-        action_spans.push(Span::styled("[l]", Style::default().fg(Color::Cyan)));
-        action_spans.push(Span::raw(" Links   "));
-        action_spans.push(Span::styled("[q/Esc]", Style::default().fg(Color::Cyan)));
-        action_spans.push(Span::raw(" Quit"));
-
-        lines.push(Line::from(action_spans));
-
-        if let Some(msg) = &model.message {
-            let is_busy = model.is_checking || model.is_checking_links || model.is_fixing;
-            let status_prefix = if is_busy {
-                format!("status: {} ", spinner(model.tick))
-            } else {
-                "status: ".to_string()
-            };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    status_prefix,
-                    if is_busy {
-                        Style::default().fg(Color::Cyan)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    },
-                ),
-                Span::styled(msg, Style::default().fg(Color::White)),
-            ]));
+        FocusedPane::BrokenLinks => {
+            if !model.broken_links().is_empty() {
+                hints.push(KeyHint::new("Enter/e", "Edit"));
+            }
+            hints.push(KeyHint::new("d", "Desk"));
+            hints.push(KeyHint::new("j/k", "Move"));
+        }
+        FocusedPane::Checks | FocusedPane::Health | FocusedPane::ExtensionPanes => {
+            hints.push(KeyHint::new("j/k", "Move"));
+            hints.push(KeyHint::new("d", "Desk"));
+        }
+        FocusedPane::OutputPreview => {
+            hints.push(KeyHint::new("j/k", "Scroll"));
+            hints.push(KeyHint::new("d", "Desk"));
         }
     }
 
-    let paragraph = Paragraph::new(lines);
-    f.render_widget(paragraph, inner);
+    hints.push(KeyHint::new("c", "Check"));
+    hints.push(KeyHint::new("f", "Fix"));
+    hints.push(KeyHint::new("l", "Links"));
+    hints.push(KeyHint::new("q", "Quit"));
+
+    let is_busy = model.is_checking || model.is_checking_links || model.is_fixing;
+    let status = model.message.as_deref().map(|msg| {
+        if is_busy {
+            StatusLine::info(format!("{} {msg}", spinner(model.tick)))
+        } else {
+            classify_status_message(msg, &model.check_outcomes)
+        }
+    });
+
+    FooterBar::new()
+        .hints(&hints)
+        .status(status)
+        .summary(footer_summary(model))
+        .render(f, area, theme);
+}
+
+fn classify_status_message<'a>(msg: &'a str, check_outcomes: &[Outcome]) -> StatusLine<'a> {
+    if msg.starts_with("Failed")
+        || msg.contains("error")
+        || msg.contains("not allowed")
+        || msg.contains("not installed")
+    {
+        StatusLine::error(msg)
+    } else if msg == "Checks completed." {
+        if check_outcomes
+            .iter()
+            .any(|outcome| !matches!(outcome.status, Status::Passed))
+        {
+            StatusLine::error(msg)
+        } else {
+            StatusLine::success(msg)
+        }
+    } else if msg.starts_with("Fixes applied") || msg.starts_with("Allowed ") {
+        StatusLine::success(msg)
+    } else {
+        StatusLine::info(msg)
+    }
+}
+
+fn footer_summary(model: &Model) -> String {
+    if model.is_checking || model.is_checking_links || model.is_fixing {
+        return format!("{} Running background tasks...", spinner(model.tick));
+    }
+
+    let readiness = model
+        .health_report
+        .as_ref()
+        .map(|report| format!("Readiness {}%", report.overall_percent))
+        .unwrap_or_else(|| "Readiness scanning...".to_string());
+    let broken = model.broken_links().len();
+    format!(
+        "{readiness} · {} extensions · {broken} broken links",
+        model.extensions.len()
+    )
 }

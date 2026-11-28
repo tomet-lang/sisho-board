@@ -69,14 +69,28 @@ inside `crates/*`, keeping Layer 0 and Layer 1 crates TUI-free.
   guard: (twrit: door)
 
   door: (
-    names:   ("sisho_run", "sisho_tools", "sisho_vault", "sisho_serve", "sisho_tui", "sisho_cli")
+    names:   ("sisho_run", "sisho_tools", "sisho_vault", "sisho_serve", "sisho_cli")
     allowed: ()
   )
 }
 
 `sisho-board` depends on no internal `sisho-*` crate (only `sisho-sdk` for the
-extension protocol). The extension knows the contract, not the orchestrator's
-internals.
+extension protocol and `sisho-tui` for shared TUI chrome). The extension knows
+the contract, not the orchestrator's internals.
+
+==[ sisho-tui-in-tui-only ]
+
+@rule(sisho-tui-in-tui-only){
+  guard: (twrit: door)
+
+  door: (
+    names:   ("sisho_tui")
+    within:  ("crates/*", "app")
+    allowed: ("crates/sisho-board-tui")
+  )
+}
+
+Only `crates/sisho-board-tui` (Layer 2) may depend on or import `sisho_tui`.
 
 ==[ tmtroot-output-not-edited ]
 

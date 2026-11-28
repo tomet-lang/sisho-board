@@ -13,6 +13,7 @@ sisho-board-health = { workspace = true }
 sisho-board-run    = { workspace = true }
 sisho-board-sdk    = { workspace = true }
 sisho-sdk          = { workspace = true }
+sisho-tui          = { workspace = true }
 #--- Crates.io ---
 anyhow    = { workspace = true }
 crossterm = { workspace = true }
