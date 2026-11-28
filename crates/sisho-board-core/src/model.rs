@@ -59,6 +59,14 @@ impl ExtensionItem {
             is_querying: false,
         }
     }
+
+    /// True if this extension is active, allowed, and declares TUI capability.
+    pub fn is_tui_launchable(&self) -> bool {
+        self.is_active
+            && self.word != "board"
+            && self.trust == TrustState::Allowed
+            && self.info.as_ref().is_some_and(|i| i.capabilities.tui)
+    }
 }
 
 /// Pending confirmation prompt for changing an extension's trust state via `sisho`.
@@ -175,6 +183,8 @@ pub struct Model {
     pub preview_source: PreviewSource,
     pub confirm_fix: bool,
     pub pending_trust: Option<PendingTrustPrompt>,
+    pub is_launcher_open: bool,
+    pub launcher_selected: usize,
     pub message: Option<String>,
     pub is_checking: bool,
     pub is_checking_links: bool,
@@ -244,6 +254,8 @@ impl Model {
             preview_source: PreviewSource::default(),
             confirm_fix: false,
             pending_trust: None,
+            is_launcher_open: false,
+            launcher_selected: 0,
             message: Some("Running checks...".to_string()),
             is_checking: false,
             is_checking_links: false,
@@ -321,10 +333,8 @@ impl Model {
         });
     }
 
-    /// Open the trust confirmation prompt for the currently selected extension
-    /// in `Tools & Extensions`, without executing or changing trust yet.
-    pub fn request_trust_prompt(&mut self) {
-        let Some(ext) = self.extensions.get(self.selected_extension) else {
+    fn request_trust_prompt_at(&mut self, index: usize) {
+        let Some(ext) = self.extensions.get(index) else {
             return;
         };
         self.confirm_fix = false;
@@ -333,6 +343,21 @@ impl Model {
             canonical_path: ext.canonical_path.clone(),
             current_trust: ext.trust,
         });
+    }
+
+    /// Open the trust confirmation prompt for the currently selected extension
+    /// in `Tools & Extensions`, without executing or changing trust yet.
+    pub fn request_trust_prompt(&mut self) {
+        self.request_trust_prompt_at(self.selected_extension);
+    }
+
+    /// Open the trust confirmation prompt for the currently selected extension
+    /// in the TUI extension launcher, without executing or changing trust yet.
+    pub fn request_launcher_trust_prompt(&mut self) {
+        let Some((index, _)) = self.launcher_items().get(self.launcher_selected).copied() else {
+            return;
+        };
+        self.request_trust_prompt_at(index);
     }
 
     /// Apply a confirmed trust decision (`Allowed`, `Denied`, or `Untrusted`)
@@ -366,6 +391,8 @@ impl Model {
                 }
             }
         }
+
+        self.clamp_launcher_selection();
 
         match new_state {
             TrustState::Allowed => {
@@ -564,6 +591,7 @@ impl Model {
                             ext.board_pane = board_pane;
                         }
                     }
+                    self.clamp_launcher_selection();
                 }
             }
         }
@@ -817,5 +845,86 @@ impl Model {
 
     pub fn selected_broken_link_item(&self) -> Option<&BrokenLink> {
         self.broken_links().get(self.selected_broken_link)
+    }
+
+    /// Active extensions eligible to appear in the global TUI extension launcher.
+    ///
+    /// Excludes `board`, inactive/shadowed extensions, and [`TrustState::Denied`] extensions.
+    /// [`TrustState::Allowed`] extensions are included only once queried and known to declare
+    /// `capabilities.tui = true`. [`TrustState::Untrusted`] active extensions are included
+    /// (without ever executing them) so users can inspect or allow them in place.
+    pub fn launcher_items(&self) -> Vec<(usize, &ExtensionItem)> {
+        self.extensions
+            .iter()
+            .enumerate()
+            .filter(|(_, ext)| {
+                ext.is_active
+                    && ext.word != "board"
+                    && match ext.trust {
+                        TrustState::Allowed => {
+                            ext.info.as_ref().is_some_and(|i| i.capabilities.tui)
+                        }
+                        TrustState::Untrusted => true,
+                        TrustState::Denied => false,
+                    }
+            })
+            .collect()
+    }
+
+    fn clamp_launcher_selection(&mut self) {
+        let count = self.launcher_items().len();
+        if count == 0 {
+            self.launcher_selected = 0;
+        } else if self.launcher_selected >= count {
+            self.launcher_selected = count - 1;
+        }
+    }
+
+    /// Open the global TUI extension launcher modal, clearing transient counter prompts.
+    pub fn open_launcher(&mut self) {
+        self.confirm_fix = false;
+        self.pending_trust = None;
+        self.is_launcher_open = true;
+        self.clamp_launcher_selection();
+    }
+
+    /// Close the global TUI extension launcher modal.
+    pub fn close_launcher(&mut self) {
+        self.is_launcher_open = false;
+    }
+
+    /// Move the launcher selection up by one item.
+    pub fn move_launcher_selection_up(&mut self) {
+        if self.launcher_selected > 0 {
+            self.launcher_selected -= 1;
+        }
+    }
+
+    /// Move the launcher selection down by one item.
+    pub fn move_launcher_selection_down(&mut self) {
+        let count = self.launcher_items().len();
+        if count > 0 && self.launcher_selected + 1 < count {
+            self.launcher_selected += 1;
+        }
+    }
+
+    /// Return the currently selected extension in the TUI extension launcher.
+    pub fn selected_launcher_extension(&self) -> Option<&ExtensionItem> {
+        self.launcher_items()
+            .get(self.launcher_selected)
+            .map(|&(_, ext)| ext)
+    }
+
+    /// Target path argument passed when launching a TUI extension from the launcher.
+    ///
+    /// Returns the selected broken link's source path when [`FocusedPane::BrokenLinks`]
+    /// is focused and has a selection; otherwise returns `self.dir.clone()`.
+    pub fn launch_target_arg(&self) -> PathBuf {
+        if self.focused_pane == FocusedPane::BrokenLinks {
+            if let Some(link) = self.selected_broken_link_item() {
+                return self.dir.join(&link.source);
+            }
+        }
+        self.dir.clone()
     }
 }

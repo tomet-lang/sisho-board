@@ -12,7 +12,7 @@ use sisho_board_core::tools::Verdict;
 use sisho_board_core::trust::TrustState;
 use sisho_board_run::{Outcome, Status};
 use sisho_board_sdk::BoardStatus;
-use sisho_tui::{FooterBar, HeaderBar, KeyHint, ShellLayout, StatusLine, Theme};
+use sisho_tui::{FooterBar, HeaderBar, KeyHint, ModalFrame, ShellLayout, StatusLine, Theme};
 
 /// Render the complete `sisho-board` interface inside the shared `sisho-tui` shell.
 pub fn draw(f: &mut Frame, model: &Model) {
@@ -24,6 +24,9 @@ pub fn draw(f: &mut Frame, model: &Model) {
         .render(f, shell.header, &theme);
 
     draw_board(f, shell.body, model, &theme);
+    if model.is_launcher_open {
+        draw_launcher_modal(f, shell.body, model, &theme);
+    }
     draw_footer(f, shell.footer, model, &theme);
 }
 
@@ -722,6 +725,135 @@ fn draw_output_preview(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) 
     f.render_widget(paragraph, area);
 }
 
+fn draw_launcher_modal(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
+    let inner = ModalFrame::new(" TUI Extensions ", 76, 72).render(f, area, theme);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let target_arg = model.launch_target_arg();
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("Target: ", Style::default().fg(theme.muted)),
+            Span::styled(
+                target_arg.display().to_string(),
+                Style::default().fg(theme.secondary),
+            ),
+        ]),
+        Line::from(""),
+    ];
+
+    let items = model.launcher_items();
+    let mut selected_range: Option<(usize, usize)> = None;
+
+    if items.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No launchable TUI extensions found.",
+            Style::default().fg(theme.muted),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Install a sisho-<word> extension with capabilities.tui = true, or inspect Tools & Extensions.",
+            Style::default().fg(theme.muted),
+        )));
+    } else {
+        for (idx, (_, ext)) in items.iter().enumerate() {
+            let start_line = lines.len();
+            let is_selected = idx == model.launcher_selected;
+            let cursor = if is_selected { "> " } else { "  " };
+
+            let (trust_icon, trust_style, trust_badge) = match ext.trust {
+                TrustState::Allowed => (
+                    "✓ ",
+                    Style::default().fg(theme.success),
+                    Span::styled(" [allowed]", Style::default().fg(theme.success)),
+                ),
+                TrustState::Untrusted => (
+                    "? ",
+                    Style::default().fg(theme.warning),
+                    Span::styled(" [untrusted]", Style::default().fg(theme.warning)),
+                ),
+                TrustState::Denied => (
+                    "✗ ",
+                    Style::default().fg(theme.error),
+                    Span::styled(" [denied]", Style::default().fg(theme.error)),
+                ),
+            };
+
+            let mut header_spans = vec![
+                Span::styled(cursor, cursor_style(is_selected, theme)),
+                Span::styled(trust_icon, trust_style),
+                Span::styled(
+                    &ext.word,
+                    if is_selected {
+                        Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                    } else {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    },
+                ),
+            ];
+
+            if let Some(info) = &ext.info {
+                header_spans.push(Span::styled(
+                    format!(" v{}", info.version),
+                    Style::default().fg(theme.secondary),
+                ));
+            }
+
+            header_spans.push(trust_badge);
+            lines.push(Line::from(header_spans));
+
+            if ext.is_querying {
+                lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled("querying...", Style::default().fg(theme.muted)),
+                ]));
+            } else if let Some(info) = &ext.info
+                && !info.about.is_empty()
+            {
+                lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(&info.about, Style::default().fg(theme.inactive_tab_fg)),
+                ]));
+            } else if ext.trust == TrustState::Untrusted {
+                lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(
+                        "(allow via [a] or [Enter] to query metadata)",
+                        Style::default().fg(theme.muted),
+                    ),
+                ]));
+            }
+
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled(
+                    ext.path.display().to_string(),
+                    Style::default().fg(theme.muted),
+                ),
+            ]));
+
+            let end_line = lines.len();
+            if is_selected {
+                selected_range = Some((start_line, end_line));
+            }
+        }
+    }
+
+    let visible_height = inner.height as usize;
+    let scroll_y = match selected_range {
+        Some((start, end)) if end > visible_height => {
+            (end - visible_height).min(start)
+        }
+        _ => 0,
+    };
+
+    let paragraph = Paragraph::new(lines)
+        .scroll((scroll_y as u16, 0))
+        .wrap(Wrap { trim: false });
+    f.render_widget(paragraph, inner);
+}
+
 fn draw_footer(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
     if let Some(prompt) = &model.pending_trust {
         let hints = [
@@ -755,6 +887,29 @@ fn draw_footer(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
         return;
     }
 
+    if model.is_launcher_open {
+        let launcher_count = model.launcher_items().len();
+        let hints = if launcher_count > 0 {
+            vec![
+                KeyHint::new("j/k", "Move"),
+                KeyHint::new("Enter", "Launch"),
+                KeyHint::new("a", "Change Trust"),
+                KeyHint::new("Esc/x", "Close"),
+            ]
+        } else {
+            vec![KeyHint::new("Esc/x", "Close")]
+        };
+        let status = StatusLine::info(format!(
+            "TUI Extension Launcher ({launcher_count} available)"
+        ));
+        FooterBar::new()
+            .hints(&hints)
+            .status(Some(status))
+            .summary(footer_summary(model))
+            .render(f, area, theme);
+        return;
+    }
+
     let focus_desc = match model.focused_pane {
         FocusedPane::Checks => "Pane:Checks",
         FocusedPane::Health => "Pane:Health",
@@ -777,19 +932,17 @@ fn draw_footer(f: &mut Frame, area: Rect, model: &Model, theme: &Theme) {
             if !model.broken_links().is_empty() {
                 hints.push(KeyHint::new("Enter/e", "Edit"));
             }
-            hints.push(KeyHint::new("d", "Desk"));
             hints.push(KeyHint::new("j/k", "Move"));
         }
         FocusedPane::Checks | FocusedPane::Health | FocusedPane::ExtensionPanes => {
             hints.push(KeyHint::new("j/k", "Move"));
-            hints.push(KeyHint::new("d", "Desk"));
         }
         FocusedPane::OutputPreview => {
             hints.push(KeyHint::new("j/k", "Scroll"));
-            hints.push(KeyHint::new("d", "Desk"));
         }
     }
 
+    hints.push(KeyHint::new("x", "Launch"));
     hints.push(KeyHint::new("c", "Check"));
     hints.push(KeyHint::new("f", "Fix"));
     hints.push(KeyHint::new("l", "Links"));

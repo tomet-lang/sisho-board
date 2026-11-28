@@ -6,6 +6,7 @@ use sisho_board_health::health::{HealthReport, PillarMetric};
 use sisho_board_health::links::{BrokenLink, Position, Report};
 use sisho_board_run::{Outcome, Status};
 use sisho_board_sdk::{BoardGauge, BoardItem, BoardPane, BoardStatus};
+use sisho_sdk::{Capabilities, ExtensionInfo};
 
 use crate::config::BoardConfig;
 use crate::model::{
@@ -103,6 +104,8 @@ fn create_test_model() -> Model {
         preview_source: PreviewSource::CheckStep,
         confirm_fix: false,
         pending_trust: None,
+        is_launcher_open: false,
+        launcher_selected: 0,
         message: None,
         is_checking: true,
         is_checking_links: false,
@@ -386,4 +389,236 @@ fn board_config_hidden_extension_panes_hides_pane_without_affecting_trust() {
     assert!(!model.has_extension_panes());
     assert!(model.active_extension_panes().is_empty());
     assert_eq!(model.extensions[0].trust, TrustState::Allowed);
+}
+
+fn make_info(word: &str, about: &str, tui: bool) -> ExtensionInfo {
+    ExtensionInfo::new(word, "0.1.0", about)
+        .with_capabilities(Capabilities::new().with_tui(tui))
+}
+
+#[test]
+fn launcher_items_filters_by_active_word_trust_and_tui_capability() {
+    let mut model = create_test_model();
+
+    let mut board_ext = ExtensionItem::new("board", PathBuf::from("/bin/sisho-board"), true, None);
+    board_ext.trust = TrustState::Allowed;
+    board_ext.info = Some(make_info("board", "Board itself", true));
+
+    let mut inactive_tui =
+        ExtensionItem::new("shadowed", PathBuf::from("/alt/sisho-shadowed"), false, None);
+    inactive_tui.trust = TrustState::Allowed;
+    inactive_tui.info = Some(make_info("shadowed", "Shadowed TUI", true));
+
+    let mut denied_ext = ExtensionItem::new("denied", PathBuf::from("/bin/sisho-denied"), true, None);
+    denied_ext.trust = TrustState::Denied;
+
+    let mut allowed_cli_only =
+        ExtensionItem::new("audit", PathBuf::from("/bin/sisho-audit"), true, None);
+    allowed_cli_only.trust = TrustState::Allowed;
+    allowed_cli_only.info = Some(make_info("audit", "CLI audit", false));
+
+    let mut allowed_unqueried =
+        ExtensionItem::new("pending", PathBuf::from("/bin/sisho-pending"), true, None);
+    allowed_unqueried.trust = TrustState::Allowed;
+    allowed_unqueried.is_querying = true;
+
+    let mut allowed_no_info =
+        ExtensionItem::new("legacy", PathBuf::from("/bin/sisho-legacy"), true, None);
+    allowed_no_info.trust = TrustState::Allowed;
+
+    let mut allowed_tui = ExtensionItem::new("desk", PathBuf::from("/bin/sisho-desk"), true, None);
+    allowed_tui.trust = TrustState::Allowed;
+    allowed_tui.info = Some(make_info("desk", "Interactive desk", true));
+
+    let untrusted_ext =
+        ExtensionItem::new("history", PathBuf::from("/bin/sisho-history"), true, None);
+
+    model.extensions = vec![
+        board_ext,
+        inactive_tui,
+        denied_ext,
+        allowed_cli_only,
+        allowed_unqueried,
+        allowed_no_info,
+        allowed_tui,
+        untrusted_ext,
+    ];
+
+    let items = model.launcher_items();
+    let summary: Vec<(usize, &str, bool)> = items
+        .iter()
+        .map(|&(idx, ext)| (idx, ext.word.as_str(), ext.is_tui_launchable()))
+        .collect();
+    assert_eq!(summary, vec![(6, "desk", true), (7, "history", false)]);
+}
+
+#[test]
+fn launcher_open_close_selection_and_clamping() {
+    let mut model = create_test_model();
+
+    let mut desk = ExtensionItem::new("desk", PathBuf::from("/bin/sisho-desk"), true, None);
+    desk.trust = TrustState::Allowed;
+    desk.info = Some(make_info("desk", "Desk", true));
+
+    let history = ExtensionItem::new("history", PathBuf::from("/bin/sisho-history"), true, None);
+    model.extensions = vec![desk, history];
+
+    // Opening launcher clears transient prompts and clamps stale selection.
+    model.confirm_fix = true;
+    model.pending_trust = Some(PendingTrustPrompt {
+        word: "desk".to_string(),
+        canonical_path: PathBuf::from("/bin/sisho-desk"),
+        current_trust: TrustState::Allowed,
+    });
+    model.launcher_selected = 99;
+    model.open_launcher();
+
+    assert!(model.is_launcher_open);
+    assert!(!model.confirm_fix);
+    assert!(model.pending_trust.is_none());
+    assert_eq!(model.launcher_selected, 1);
+    assert_eq!(
+        model.selected_launcher_extension().map(|e| e.word.as_str()),
+        Some("history")
+    );
+
+    // Up/down bounds
+    model.move_launcher_selection_down();
+    assert_eq!(model.launcher_selected, 1);
+    model.move_launcher_selection_up();
+    assert_eq!(model.launcher_selected, 0);
+    assert_eq!(
+        model.selected_launcher_extension().map(|e| e.word.as_str()),
+        Some("desk")
+    );
+    model.move_launcher_selection_up();
+    assert_eq!(model.launcher_selected, 0);
+
+    model.close_launcher();
+    assert!(!model.is_launcher_open);
+
+    // Empty launcher items
+    model.extensions.clear();
+    model.launcher_selected = 5;
+    model.open_launcher();
+    assert_eq!(model.launcher_selected, 0);
+    assert_eq!(model.selected_launcher_extension(), None);
+    model.move_launcher_selection_down();
+    assert_eq!(model.launcher_selected, 0);
+}
+
+#[test]
+fn launcher_trust_prompt_and_queried_updates_keep_selection_valid() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "sisho-board-launcher-trust-{}",
+            crate::unique_test_suffix()
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let mock_sisho = temp_dir.join("sisho");
+        fs::write(&mock_sisho, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&mock_sisho, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut model = create_test_model();
+        model.sisho_program = mock_sisho;
+
+        let mut denied = ExtensionItem::new("denied", PathBuf::from("/bin/sisho-denied"), true, None);
+        denied.trust = TrustState::Denied;
+
+        let mut desk = ExtensionItem::new("desk", PathBuf::from("/bin/sisho-desk"), true, None);
+        desk.trust = TrustState::Allowed;
+        desk.info = Some(make_info("desk", "Desk", true));
+
+        let history = ExtensionItem::new("history", PathBuf::from("/bin/sisho-history"), true, None);
+
+        // index 0 is filtered out; launcher has [(1, desk), (2, history)]
+        model.extensions = vec![denied, desk, history];
+        model.open_launcher();
+        model.move_launcher_selection_down();
+        assert_eq!(
+            model.selected_launcher_extension().map(|e| e.word.as_str()),
+            Some("history")
+        );
+
+        // Requesting trust prompt from launcher targets `history`, not `denied` or `desk`.
+        model.request_launcher_trust_prompt();
+        assert_eq!(
+            model.pending_trust.as_ref().map(|p| p.word.as_str()),
+            Some("history")
+        );
+
+        // Denying `history` removes it from launcher_items and clamps launcher_selected back to 0.
+        model.apply_pending_trust(TrustState::Denied);
+        assert_eq!(model.launcher_selected, 0);
+        assert_eq!(
+            model.selected_launcher_extension().map(|e| e.word.as_str()),
+            Some("desk")
+        );
+
+        // If `desk` is re-queried and loses TUI capability, launcher_selected clamps to 0 / None.
+        model
+            .sender
+            .send(WorkerMessage::ExtensionQueried {
+                word: "desk".to_string(),
+                info: Some(make_info("desk", "CLI only now", false)),
+                board_pane: None,
+            })
+            .unwrap();
+        model.poll_background();
+        assert!(model.launcher_items().is_empty());
+        assert_eq!(model.launcher_selected, 0);
+        assert_eq!(model.selected_launcher_extension(), None);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+}
+
+#[test]
+fn launch_target_arg_uses_selected_broken_link_only_when_broken_links_focused() {
+    let mut model = create_test_model();
+    model.dir = PathBuf::from("/vault");
+    model.links_report = Some(Report {
+        files_scanned: 2,
+        links_checked: 2,
+        broken: vec![
+            BrokenLink {
+                source: PathBuf::from("docs/first.tmt"),
+                target: "missing.tmt".to_string(),
+                at: Some(Position { line: 3, column: 1 }),
+            },
+            BrokenLink {
+                source: PathBuf::from("docs/second.tmt"),
+                target: "gone.tmt".to_string(),
+                at: Some(Position { line: 7, column: 2 }),
+            },
+        ],
+        unreadable: Vec::new(),
+    });
+
+    // Not focused on BrokenLinks -> returns root dir
+    model.focused_pane = FocusedPane::Checks;
+    assert_eq!(model.launch_target_arg(), PathBuf::from("/vault"));
+
+    // Focused on BrokenLinks -> returns joined source path for selected item
+    model.focused_pane = FocusedPane::BrokenLinks;
+    assert_eq!(
+        model.launch_target_arg(),
+        PathBuf::from("/vault/docs/first.tmt")
+    );
+
+    model.move_link_selection_down();
+    assert_eq!(
+        model.launch_target_arg(),
+        PathBuf::from("/vault/docs/second.tmt")
+    );
+
+    // Empty broken links while focused -> falls back to root dir
+    model.links_report = Some(Report::default());
+    model.selected_broken_link = 0;
+    assert_eq!(model.launch_target_arg(), PathBuf::from("/vault"));
 }

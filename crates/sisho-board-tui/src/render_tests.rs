@@ -11,7 +11,7 @@ use sisho_board_core::trust::TrustState;
 use sisho_board_health::{HealthReport, PillarMetric};
 use sisho_board_run::{Outcome, Status};
 use sisho_board_sdk::{BoardGauge, BoardItem, BoardPane, BoardStatus};
-use sisho_sdk::ExtensionInfo;
+use sisho_sdk::{Capabilities, ExtensionInfo};
 
 use crate::ui;
 
@@ -141,6 +141,8 @@ fn create_mock_model() -> Model {
         preview_source: PreviewSource::default(),
         confirm_fix: false,
         pending_trust: None,
+        is_launcher_open: false,
+        launcher_selected: 0,
         message: None,
         is_checking: false,
         is_checking_links: false,
@@ -180,6 +182,8 @@ fn renders_normal_board_and_trust_badges() {
     assert!(view.contains("! ::id Declaration: 80%"), "{view}");
     assert!(view.contains("tomet check"), "{view}");
     assert!(view.contains("[Tab] Pane:Checks"), "{view}");
+    assert!(view.contains("[x] Launch"), "{view}");
+    assert!(!view.contains("[d] Desk"), "{view}");
     assert!(
         view.contains("Readiness 92% · 2 extensions · 0 broken links"),
         "{view}"
@@ -371,4 +375,67 @@ fn renders_footer_status_variants_and_theme_borders() {
     terminal.draw(|f| ui::draw(f, &model)).unwrap();
     let view = terminal.backend().to_string();
     assert!(view.contains("✓ Checks completed."), "{view}");
+}
+
+#[test]
+fn renders_launcher_modal_with_tui_and_untrusted_extensions() {
+    let backend = TestBackend::new(110, 36);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut model = create_mock_model();
+    model.extensions[0].info = Some(
+        ExtensionInfo::new("desk", "0.2.0", "Interactive desk for Tomet")
+            .with_capabilities(Capabilities::new().with_tui(true)),
+    );
+    model.open_launcher();
+
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+
+    let view = terminal.backend().to_string();
+    assert!(view.contains("TUI Extensions"), "{view}");
+    assert!(view.contains("Target: ."), "{view}");
+    assert!(view.contains("> ✓ desk v0.2.0 [allowed]"), "{view}");
+    assert!(view.contains("Interactive desk for Tomet"), "{view}");
+    assert!(view.contains("/path/to/sisho-desk"), "{view}");
+    assert!(view.contains("? experimental [untrusted]"), "{view}");
+    assert!(view.contains("/path/to/sisho-experimental"), "{view}");
+    assert!(
+        view.contains("[j/k] Move · [Enter] Launch · [a] Change Trust · [Esc/x] Close"),
+        "{view}"
+    );
+
+    // Trust confirmation prompt renders on top in the footer when triggered from the launcher.
+    model.move_launcher_selection_down();
+    model.request_launcher_trust_prompt();
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+    let trust_view = terminal.backend().to_string();
+    assert!(trust_view.contains("TUI Extensions"), "{trust_view}");
+    assert!(
+        trust_view.contains("Trust for 'sisho-experimental'"),
+        "{trust_view}"
+    );
+    assert!(
+        trust_view.contains("[y] Allow (execute) · [d] Deny (block)"),
+        "{trust_view}"
+    );
+}
+
+#[test]
+fn renders_launcher_modal_empty_state() {
+    let backend = TestBackend::new(110, 32);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut model = create_mock_model();
+    model.extensions.clear();
+    model.open_launcher();
+
+    terminal.draw(|f| ui::draw(f, &model)).unwrap();
+
+    let view = terminal.backend().to_string();
+    assert!(view.contains("TUI Extensions"), "{view}");
+    assert!(
+        view.contains("No launchable TUI extensions found."),
+        "{view}"
+    );
+    assert!(view.contains("[Esc/x] Close"), "{view}");
 }

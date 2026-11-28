@@ -34,7 +34,7 @@ It runs standalone as `sisho-board [path]`, or through `sisho` as `sisho board [
      - `c`: Execute check steps, re-evaluate Vault Readiness & Health, and refresh allowed extension board panes.
      - `f`: Execute fix steps. Always prompts for confirmation (`Apply fixes? [y/N]`) before any file write occurs, and refreshes Vault Readiness & Health upon completion.
      - `l`: Re-run the link check (`tomet check-links --json`).
-     - `d`: Launch extension `sisho-desk` (if installed, active, and `Allowed`) with terminal handover.
+     - `x`: Open the global TUI extension launcher modal from any pane. Lists active extensions excluding `board` and `Denied`: `Allowed` extensions whose `--sisho-extension-info` declares `capabilities.tui = true`, plus `Untrusted` active extensions (so users can inspect or allow them without leaving the launcher). Each entry shows extension `word`, `about` (when queried), `trust`, and `path`. Inside the launcher: `↑` / `k`, `↓` / `j` navigate; `Enter` launches an `Allowed` TUI extension with terminal handover (passing the selected broken link's source path when `Broken Links` is focused and has a selection, otherwise the board root path) or opens the trust confirmation prompt if `Untrusted`; `a` opens the trust confirmation prompt; `Esc` / `x` closes the launcher.
      - `q` / `Esc`: Exit the board.
 
 =[ Non-interactive CLI Modes (`--report` and `--json`) ]
@@ -45,7 +45,7 @@ It runs standalone as `sisho-board [path]`, or through `sisho` as `sisho board [
 =[ Extension Trust (`~/.local/share/sisho/trust.json` via `sisho`) ]
 
 - **Trust Ownership**: `sisho` is the sole owner of `~/.local/share/sisho/trust.json` (`$XDG_DATA_HOME/sisho/trust.json`). `sisho-board` never reads or writes `trust.json` directly; instead it queries `sisho --list --json` on startup and delegates trust changes via `sisho --allow <path>`, `sisho --deny <path>`, or `sisho --untrust <path>` after explicit user confirmation (`[y] Allow / [d] Deny / [u] Untrusted / [n/Esc] Cancel`).
-- **Default Untrusted Policy**: If `sisho` is missing or older, `sisho-board` falls back to scanning `PATH` without executing any binary and treats every extension as `Untrusted`. `sisho-board` never executes an `Untrusted` or `Denied` extension for `--sisho-extension-info`, `--sisho-board-pane`, editor fallback, or `d` handover.
+- **Default Untrusted Policy**: If `sisho` is missing or older, `sisho-board` falls back to scanning `PATH` without executing any binary and treats every extension as `Untrusted`. `sisho-board` never executes an `Untrusted` or `Denied` extension for `--sisho-extension-info`, `--sisho-board-pane`, editor fallback, or launcher handover.
 - **Per-Extension Environments**: When querying or launching an `Allowed` extension, `sisho-board` sets `SISHO_CONFIG_DIR` (`$XDG_CONFIG_HOME/sisho/<word>` or `$HOME/.config/sisho/<word>`) and `SISHO_DATA_DIR` (`$XDG_DATA_HOME/sisho/<word>` or `$HOME/.local/share/sisho/<word>`).
 
 =[ Board UI Configuration (`~/.config/sisho/board/board.json`) ]

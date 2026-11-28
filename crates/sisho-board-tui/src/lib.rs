@@ -3,7 +3,7 @@
 //! Two-tier design:
 //! - **Board**: Status of tools, extensions (with explicit user trust via `sisho`),
 //!   extension board panes (`--sisho-board-pane`), integrity check outcomes, and broken links.
-//! - **Counter**: Action prompt bar to run check, fix, check-links, manage extension trust, or open desk.
+//! - **Counter**: Action prompt bar to run check, fix, check-links, manage extension trust, or launch TUI extensions.
 
 pub mod screen;
 pub mod ui;
@@ -87,6 +87,49 @@ pub fn run_with_model(mut model: Model) -> anyhow::Result<()> {
                 continue;
             }
 
+            if model.is_launcher_open {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('x') => {
+                        model.close_launcher();
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        model.move_launcher_selection_down();
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        model.move_launcher_selection_up();
+                    }
+                    KeyCode::Char('a') => {
+                        model.request_launcher_trust_prompt();
+                    }
+                    KeyCode::Enter => {
+                        if let Some(ext) = model.selected_launcher_extension() {
+                            if ext.is_tui_launchable() {
+                                let word = ext.word.clone();
+                                let path = ext.path.clone();
+                                let target_arg = model.launch_target_arg();
+                                let envs = extension::extension_dir_envs(&word);
+                                model.close_launcher();
+                                screen.execute_handover(|| {
+                                    let _ = sisho_board_run::Step::new(&word, &path)
+                                        .envs(envs)
+                                        .arg(&target_arg)
+                                        .run_inherited();
+                                })?;
+                                model.refresh_tools();
+                                model.query_allowed_extensions();
+                                model.run_checks();
+                                model.run_check_links();
+                                model.run_health();
+                            } else if ext.trust == TrustState::Untrusted {
+                                model.request_launcher_trust_prompt();
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => {
                     break;
@@ -136,48 +179,8 @@ pub fn run_with_model(mut model: Model) -> anyhow::Result<()> {
                     }
                     _ => {}
                 },
-                KeyCode::Char('d') => {
-                    let desk_ext = model
-                        .extensions
-                        .iter()
-                        .find(|e| e.word == "desk" && e.is_active);
-                    match desk_ext {
-                        Some(desk) if desk.trust == TrustState::Allowed => {
-                            let desk_word = desk.word.clone();
-                            let desk_path = desk.path.clone();
-                            let target_arg = if model.focused_pane == FocusedPane::BrokenLinks {
-                                if let Some(link) = model.selected_broken_link_item() {
-                                    model.dir.join(&link.source)
-                                } else {
-                                    model.dir.clone()
-                                }
-                            } else {
-                                model.dir.clone()
-                            };
-                            let desk_envs = extension::extension_dir_envs(&desk_word);
-                            screen.execute_handover(|| {
-                                let _ = sisho_board_run::Step::new("desk", &desk_path)
-                                    .envs(desk_envs)
-                                    .arg(&target_arg)
-                                    .run_inherited();
-                            })?;
-                            model.refresh_tools();
-                            model.query_allowed_extensions();
-                            model.run_checks();
-                            model.run_check_links();
-                            model.run_health();
-                        }
-                        Some(_) => {
-                            model.message = Some(
-                                "sisho-desk is not allowed yet (focus Tools & Extensions and press [a] to allow)."
-                                    .to_string(),
-                            );
-                        }
-                        None => {
-                            model.message =
-                                Some("sisho-desk extension is not installed on PATH".to_string());
-                        }
-                    }
+                KeyCode::Char('x') => {
+                    model.open_launcher();
                 }
                 KeyCode::Tab => {
                     model.next_pane();
